@@ -471,7 +471,51 @@ def load_data():
 # ==========================================
 # 3. HELPER FUNCTIONS
 # ==========================================
-# Define the absolute path for the member list, consistent with the user's setup
+
+def cast_vote_gsheet(proposal_id, username, vote_choice):
+    """Records a YES/NO vote in the 'Votes' tab."""
+    client = init_connection()
+    if not client: return False
+    try:
+        sheet = client.open("TIC_Database_Master")
+        ws = sheet.worksheet("Votes")
+        
+        # Append new vote row
+        new_row = [
+            str(proposal_id),
+            username,
+            vote_choice,
+            datetime.now().strftime("%Y-%m-%d %H:%M")
+        ]
+        ws.append_row(new_row)
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Vote failed: {e}")
+        return False
+
+def mark_proposal_applied(proposal_id):
+    """Updates the 'Applied' column to 1 in 'Proposals' tab."""
+    client = init_connection()
+    if not client: return False
+    try:
+        sheet = client.open("TIC_Database_Master")
+        ws = sheet.worksheet("Proposals")
+        
+        # Find the row by ID
+        cell = ws.find(str(proposal_id))
+        if cell:
+            # Assuming 'Applied' is the 7th column (based on headers above)
+            # Check your sheet to be sure! 
+            applied_col_idx = 7 
+            ws.update_cell(cell.row, applied_col_idx, 1)
+            st.cache_data.clear()
+            return True
+        return False
+    except Exception as e:
+        st.error(f"Update failed: {e}")
+        return False
+        
 def update_member_field_in_gsheet(username, field_name, new_value):
     """
     Surgical update: Finds specific user and updates one specific cell.
@@ -623,6 +667,76 @@ def send_new_message(from_user, to_user, subject, body):
 # ==========================================
 # 4. VIEW COMPONENTS
 # ==========================================
+def render_voting_section(user, proposals, votes_df, target_dept):
+    """Renders the voting UI for a specific department."""
+    st.header(f"🗳️ {target_dept} Governance")
+    
+    # Filter proposals for this Dept (Active only)
+    # We check 'Dept' matches AND 'Applied' is 0 (Active)
+    active_props = [p for p in proposals if p.get('Dept') == target_dept and str(p.get('Applied')) == '0']
+    
+    if not active_props:
+        st.info("No active proposals.")
+        return
+
+    for p in active_props:
+        p_id = str(p['ID'])
+        
+        with st.container(border=True):
+            c_desc, c_act = st.columns([3, 1])
+            
+            with c_desc:
+                st.subheader(f"{p['Type']}: {p['Item']}")
+                st.write(p['Description'])
+                st.caption(f"Ends: {p['End_Date']}")
+                
+                # Calculate Results
+                if not votes_df.empty:
+                    relevant_votes = votes_df[votes_df['Proposal_ID'] == p_id]
+                    yes_count = len(relevant_votes[relevant_votes['Vote'] == 'YES'])
+                    no_count = len(relevant_votes[relevant_votes['Vote'] == 'NO'])
+                else:
+                    yes_count, no_count = 0, 0
+                
+                # Progress Bar
+                total = yes_count + no_count
+                if total > 0:
+                    yes_pct = yes_count / total
+                    st.progress(yes_pct, text=f"Yes: {yes_count} | No: {no_count}")
+                else:
+                    st.write("No votes yet.")
+
+            with c_act:
+                # 1. Check if User has already voted
+                user_has_voted = False
+                if not votes_df.empty:
+                    user_vote = votes_df[
+                        (votes_df['Proposal_ID'] == p_id) & 
+                        (votes_df['Username'] == user['u'])
+                    ]
+                    if not user_vote.empty:
+                        user_has_voted = True
+                
+                # 2. Render Buttons
+                if user_has_voted:
+                    st.success("✅ Voted")
+                else:
+                    c_y, c_n = st.columns(2)
+                    if c_y.button("YES", key=f"y_{p_id}"):
+                        cast_vote_gsheet(p_id, user['u'], "YES")
+                        st.rerun()
+                    if c_n.button("NO", key=f"n_{p_id}"):
+                        cast_vote_gsheet(p_id, user['u'], "NO")
+                        st.rerun()
+                
+                # 3. Admin "Apply" Button
+                # Only show if Admin AND vote is passing (simple majority)
+                if user.get('admin', False) and total > 0 and yes_count > no_count:
+                    st.divider()
+                    if st.button("Execute & Close", key=f"exe_{p_id}"):
+                        if mark_proposal_applied(p_id):
+                            st.success("Proposal Applied!")
+                            st.rerun()
 
 def render_leaderboard(current_user):
     st.title("🏆 Trading Leaderboard")
@@ -1620,7 +1734,7 @@ def main():
     if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
     
     # Unpack everything
-    members, f_port, q_port, msgs, props, calendar_events, f_total, q_total = load_data()
+    members, f_port, q_port, msgs, props, calendar, f_tot, q_tot, df_votes = load_data()
 
     if not st.session_state['logged_in']:
         c1, c2, c3 = st.columns([1,1.5,1])
@@ -1715,17 +1829,36 @@ def main():
         
         st.markdown("---")
 
-    # ROUTING
+# ROUTING
     if nav == "Dashboard":
+        # 1. BOARD & ADVISORY (See Both)
         if user['d'] in ['Board', 'Advisory']:
             st.title("🏛️ Executive Overview")
             t_fund, t_quant = st.tabs(["📈 Fundamental", "🤖 Quant"])
-            with t_fund: render_fundamental_dashboard(user, f_port, props)
-            with t_quant: render_quant_dashboard(user, q_port, props)
+            
+            with t_fund: 
+                render_fundamental_dashboard(user, f_port, props)
+                st.divider()
+                # FIX: Department matches the Tab (Fundamental)
+                render_voting_section(user, props, df_votes, "Fundamental")
+                
+            with t_quant: 
+                render_quant_dashboard(user, q_port, props)
+                st.divider()
+                # FIX: Department matches the Tab (Quant)
+                render_voting_section(user, props, df_votes, "Quant")
+
+        # 2. QUANT TEAM (See Quant Only)
         elif user['d'] == 'Quant': 
             render_quant_dashboard(user, q_port, props)
+            st.divider()
+            render_voting_section(user, props, df_votes, "Quant")
+            
+        # 3. FUNDAMENTAL / GENERAL (See Fundamental Only)
         else: 
             render_fundamental_dashboard(user, f_port, props)
+            st.divider()
+            render_voting_section(user, props, df_votes, "Fundamental")
             
     elif nav == "Risk & Macro": render_risk_macro_dashboard(f_port)
     elif nav == "Valuation Tool": render_valuation_sandbox() 
@@ -1741,6 +1874,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
