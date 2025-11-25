@@ -195,20 +195,38 @@ def fetch_company_events(tickers):
             
     return events
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600*24)
 def fetch_correlation_data(tickers):
-    # Filter out empty or non-string values just in case
+    """
+    Fetches 1 year of price history and calculates correlation.
+    Automatically removes tickers that fail to download or have no data.
+    """
+    # 1. Basic cleanup of input list
     valid_tickers = [str(t) for t in tickers if str(t) != 'nan' and t]
     
     if len(valid_tickers) < 2:
-        return pd.DataFrame() # Need at least 2 stocks for correlation
+        return pd.DataFrame() # Need at least 2 stocks to correlate
         
     try:
-        # Download data for these specific tickers
+        # 2. Bulk Download
         df = yf.download(valid_tickers, period="1y", progress=False)['Close']
-        if df.empty: return pd.DataFrame()
-        return df.corr()
-    except:
+        
+        if df.empty: 
+            return pd.DataFrame()
+
+        # 3. CRITICAL FIX: Remove columns (tickers) that are completely empty
+        # This handles cases where Yahoo Finance returns a column of NaNs for a bad ticker
+        df_clean = df.dropna(axis=1, how='all')
+        
+        # 4. Final Check: Do we still have at least 2 assets?
+        if df_clean.shape[1] < 2:
+            return pd.DataFrame()
+            
+        # 5. Calculate Correlation Matrix
+        return df_clean.corr()
+        
+    except Exception as e:
+        # print(f"Correlation Error: {e}") # Uncomment for debugging
         return pd.DataFrame()
 
 @st.cache_data(ttl=300)
@@ -2134,6 +2152,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
