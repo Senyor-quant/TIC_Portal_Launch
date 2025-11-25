@@ -993,7 +993,7 @@ def render_upcoming_events_sidebar(all_events):
         </div>
         """, unsafe_allow_html=True)
 
-def render_admin_panel(user, members_df, f_port, q_port, total_aum):
+def render_admin_panel(user, members_df, f_port, q_port, total_aum, proposals, votes_df):
     st.title("🔒 Admin Console")
     st.info(f"Logged in as: {user['n']} ({user['r']})")
     
@@ -1944,6 +1944,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
