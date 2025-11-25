@@ -276,81 +276,85 @@ def fetch_live_prices_with_change(tickers):
         return {}
     
 @st.cache_data(ttl=3600*4) # Cache for 4 hours
+@st.cache_data(ttl=3600*4)
 def fetch_real_benchmark_data(portfolio_df):
     """
-    Fetches real historical data for the S&P 500 and the user's portfolio.
-    Constructs a normalized index (Start = 100) for comparison.
+    Calculates a Weighted Return Index (Growth of 100) to avoid currency mixing issues.
     """
     end = datetime.now()
-    start = end - timedelta(days=180) # 6 Month lookback
+    start = end - timedelta(days=180)
     
-    # 1. Fetch S&P 500 (The Benchmark)
+    # 1. Setup the DataFrame with Dates
+    # We assume business days (B) to align markets roughly
+    dates = pd.date_range(start=start, end=end, freq='B')
+    df_chart = pd.DataFrame(index=dates)
+    
+    # 2. Fetch Benchmark (S&P 500)
     try:
-        # ^GSPC is the ticker for S&P 500
         sp500 = yf.download('^GSPC', start=start, end=end, progress=False)['Close']
-        # Normalize: (Price / Start_Price) * 100
-        sp500_norm = (sp500 / sp500.iloc[0]) * 100
-        
-        # Prepare the main dataframe
-        df_chart = pd.DataFrame({'Date': sp500.index, 'SP500': sp500_norm.values})
-    except Exception as e:
-        # Fallback if offline
-        dates = pd.date_range(start=start, end=end)
-        return pd.DataFrame({'Date': dates, 'SP500': 100, 'TIC_Fund': 100})
+        # Normalize to 100 (Growth of $100)
+        if not sp500.empty:
+            df_chart['SP500'] = (sp500 / sp500.iloc[0]) * 100
+    except:
+        df_chart['SP500'] = 100.0
 
-    # 2. Fetch Portfolio Performance (The TIC Fund)
+    # 3. Fetch TIC Portfolio
     if not portfolio_df.empty and 'ticker' in portfolio_df.columns:
         try:
-            tickers = portfolio_df['ticker'].dropna().unique().tolist()
-            # Clean tickers (remove non-strings)
+            # Filter Valid Tickers (No Cash)
             tickers = [
                 t for t in portfolio_df['ticker'].unique() 
                 if isinstance(t, str) and "CASH" not in t.upper()
             ]
             
+            # Get Cash Weight
+            # If you have rows like 'CASH_EUR', sum their weights
+            cash_weight = 0.0
+            if 'target_weight' in portfolio_df.columns:
+                cash_rows = portfolio_df[portfolio_df['ticker'].str.contains("CASH", na=False)]
+                cash_weight = pd.to_numeric(cash_rows['target_weight'], errors='coerce').sum()
+
             if tickers:
-                # Download all stocks at once
+                # Download Equity Data
                 data = yf.download(tickers, start=start, end=end, progress=False)['Close']
+                data = data.ffill().bfill() # Fill gaps (holidays)
                 
-                # Forward fill missing data (e.g. holidays) to prevent calculation breaks
-                data = data.ffill()
+                # Reindex to match our main timeline
+                data = data.reindex(df_chart.index, method='ffill')
                 
-                # Calculate "Pro-Forma" History:
-                # We assume the CURRENT weights were held for the whole period.
-                # (This is a standard way to visualize "Strategy Performance")
+                # Calculate Individual Stock Indexes (Start = 100)
+                # This creates a "Growth" curve for every single stock in local currency
+                # (10% growth in USD is the same shape as 10% growth in EUR)
+                stock_indexes = (data / data.iloc[0]) * 100
                 
-                # Get weights from Excel, map them to the tickers
-                # If 'target_weight' is missing, assume equal weight
-                if 'target_weight' in portfolio_df.columns:
-                    weights = portfolio_df.set_index('ticker')['target_weight']
-                    # Normalize weights to sum to 1.0 just in case
-                    weights = weights / weights.sum()
-                else:
-                    weights = pd.Series(1/len(tickers), index=tickers)
+                # Apply Weights
+                weighted_returns = pd.Series(0.0, index=df_chart.index)
                 
-                # Calculate Weighted Index
-                # 1. Normalize all stocks to start at 100
-                norm_data = (data / data.iloc[0]) * 100
+                for t in tickers:
+                    if t in stock_indexes.columns:
+                        # Get weight from your Google Sheet
+                        w = portfolio_df.loc[portfolio_df['ticker'] == t, 'target_weight'].iloc[0]
+                        # Add weighted contribution to the index
+                        weighted_returns += stock_indexes[t] * float(w)
                 
-                # 2. Apply weights (Multiply each column by its weight)
-                # We align the weights to the columns available in the downloaded data
-                valid_cols = norm_data.columns.intersection(weights.index)
-                weighted_index = norm_data[valid_cols].multiply(weights[valid_cols]).sum(axis=1)
+                # Add Cash Contribution (Cash stays at 100, it doesn't grow/shrink in this view)
+                # If you have 20% cash, that portion of the portfolio stays flat
+                weighted_returns += (100.0 * cash_weight)
                 
-                # 3. Add to the main dataframe (Aligning dates)
-                # We reindex to match the SP500 dates to handle slight mismatches
-                aligned_tic = weighted_index.reindex(df_chart['Date'], method='ffill')
-                df_chart['TIC_Fund'] = aligned_tic.values
+                df_chart['TIC_Fund'] = weighted_returns
             else:
-                df_chart['TIC_Fund'] = df_chart['SP500'] # Fallback line
+                df_chart['TIC_Fund'] = 100.0
+                
         except Exception as e:
-            print(f"Portfolio History Error: {e}")
-            df_chart['TIC_Fund'] = 100 # Flat line on error
+            print(f"Bench Error: {e}")
+            df_chart['TIC_Fund'] = 100.0
     else:
-        df_chart['TIC_Fund'] = 100
+        df_chart['TIC_Fund'] = 100.0
 
+    # Clean up for plotting
+    df_chart = df_chart.dropna().reset_index().rename(columns={'index':'Date'})
     return df_chart
-
+    
 @st.cache_data(ttl=60) # Cache for 1 min to keep data fresh
 def load_data():
     # --- 1. CONFIGURATION & MAPPING ---
@@ -1301,20 +1305,35 @@ def render_fundamental_dashboard(user, portfolio, proposals):
         )
     
     st.subheader("Performance vs Market (6 Months)")
+    
+    # 1. Fetch Data
     bench = fetch_real_benchmark_data(portfolio)
-    st.plotly_chart(
-        px.line(
-            bench, 
-            x='Date', 
-            y=['SP500', 'TIC_Fund'], 
-            color_discrete_map={
-                'SP500': '#444444',  # Dark Grey for Benchmark
-                'TIC_Fund': '#D4AF37' # Gold for Your Fund
-            },
-            labels={'value': 'Rebased Performance (100)', 'variable': 'Index'}
-        ), 
-        use_container_width=True
+    
+    # 2. Plot
+    fig = px.line(
+        bench, 
+        x='Date', 
+        y=['SP500', 'TIC_Fund'], 
+        color_discrete_map={
+            'SP500': '#444444',   # Dark Grey
+            'TIC_Fund': '#D4AF37' # TIC Gold
+        }
     )
+    
+    # 3. Critical Styling updates
+    fig.update_layout(
+        yaxis_title="Value of Investment (Base 100)",
+        xaxis_title=None,
+        legend_title=None,
+        hovermode="x unified" # Shows both values when you hover over one date
+    )
+    
+    # Custom Hover Template to look professional
+    fig.update_traces(
+        hovertemplate="<b>%{y:.2f}</b>" # Shows 105.20 instead of long decimals
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
     
     c1, c2 = st.columns([1, 2])
     with c1:
@@ -1722,6 +1741,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
