@@ -1045,47 +1045,71 @@ def render_voting_section(user, proposals, votes_df, target_dept):
                             st.cache_data.clear()
                             st.rerun()
                             
-def render_leaderboard(current_user):
-    st.title("🏆 Trading Leaderboard")
+def render_leaderboard(user, members_df):
+    st.title("🏆 Simulation Leaderboard")
+    st.caption("Ranking based on Paper Trading performance (Starting Capital: €100k).")
     
-    # Mock Leaderboard Data
-    data = [
-        {'Rank': 1, 'Member': 'Alvise (Quant)', 'Return': 18.4, 'Equity': 118400},
-        {'Rank': 2, 'Member': 'Senyo (Board)', 'Return': 14.2, 'Equity': 114200},
-        {'Rank': 3, 'Member': 'Boaz (Alumni)', 'Return': 9.1, 'Equity': 109100},
-        {'Rank': 4, 'Member': 'Chris (Fund)', 'Return': 5.5, 'Equity': 105500},
+    # 1. Mock Competitors (Since we don't store everyone's shadow trades yet)
+    # In a full version, you'd save everyone's shadow portfolio to a DB.
+    competitors = [
+        {'Member': 'Alvise (Quant)', 'Equity': 118450.00},
+        {'Member': 'Senyo (Board)', 'Equity': 114200.00},
+        {'Member': 'Boaz (Alumni)', 'Equity': 109100.00},
+        {'Member': 'Chris (Fund)', 'Equity': 105500.00},
+        {'Member': 'Market (S&P 500)', 'Equity': 104200.00}, # Benchmark
     ]
     
-    # Calculate Current User stats
-    cash = st.session_state.get('shadow_cash', 100000)
-    holdings = st.session_state.get('shadow_holdings', {})
-    # Simple price fetch mock
-    prices = {k: 150 for k in holdings.keys()} 
-    equity = sum([v * prices[k] for k, v in holdings.items()])
-    total_val = cash + equity
-    user_return = ((total_val - 100000) / 100000) * 100
+    # 2. Calculate CURRENT USER'S Shadow Value
+    # Default to 100k if not started
+    shadow_cash = st.session_state.get('shadow_cash', 100000.0)
+    shadow_holdings = st.session_state.get('shadow_holdings', {})
     
-    user_entry = {
-        'Rank': 0, # Placeholder
-        'Member': f"{current_user['n']} (You)", 
-        'Return': user_return, 
-        'Equity': total_val
-    }
+    # Calculate Equity Value of Holdings
+    shadow_equity = 0.0
+    if shadow_holdings:
+        tickers = list(shadow_holdings.keys())
+        # Fetch live prices for accurate valuation
+        prices = fetch_live_prices_with_change(tickers)
+        for t, units in shadow_holdings.items():
+            p = prices.get(t, {}).get('price', 0)
+            shadow_equity += units * p
+            
+    user_total = shadow_cash + shadow_equity
     
-    data.append(user_entry)
-    df = pd.DataFrame(data).sort_values(by='Return', ascending=False).reset_index(drop=True)
+    # Add User to List
+    competitors.append({
+        'Member': f"{user['n']} (You)",
+        'Equity': user_total,
+        'Is_User': True
+    })
+    
+    # 3. Create DataFrame & Calculate Return
+    df = pd.DataFrame(competitors)
+    df['Return'] = ((df['Equity'] - 100000) / 100000) * 100
+    
+    # Sort (Highest Return First)
+    df = df.sort_values(by='Return', ascending=False).reset_index(drop=True)
     df['Rank'] = df.index + 1
     
-    # Highlight user row
+    # 4. Render
     def highlight_user(row):
-        return ['background-color: #262730; font-weight: bold' if '(You)' in row['Member'] else '' for _ in row]
+        if row.get('Is_User', False):
+            return ['background-color: #D4AF37; color: black; font-weight: bold'] * len(row)
+        elif 'Market' in row['Member']:
+            return ['background-color: #262730; border: 1px solid white'] * len(row)
+        else:
+            return [''] * len(row)
 
     st.dataframe(
-        df.style.apply(highlight_user, axis=1).format({'Return': "{:.2f}%", 'Equity': "€{:,.0f}"}),
+        df[['Rank', 'Member', 'Return', 'Equity']].style.apply(highlight_user, axis=1).format({
+            'Return': "{:+.2f}%", 
+            'Equity': "€{:,.0f}"
+        }),
         use_container_width=True,
-        hide_index=True
+        hide_index=True,
+        height=400
     )
-
+    
 def render_valuation_sandbox():
     st.title("🧮 Valuation Sandbox (DCF)")
     st.caption("DISCOUNTED CASH FLOW MODEL // INTRINSIC VALUE CALCULATOR")
@@ -2666,6 +2690,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
