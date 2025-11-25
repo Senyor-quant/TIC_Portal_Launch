@@ -11,6 +11,7 @@ import os
 import calendar 
 import gspread
 from google.oauth2.service_account import Credentials
+import plotly.graph_objects as go
 
 # --- GOOGLE SHEETS CONNECTION SETUP ---
 SCOPES = [
@@ -856,11 +857,10 @@ def send_new_message(from_user, to_user, subject, body):
 # 4. VIEW COMPONENTS
 # ==========================================
 def render_voting_section(user, proposals, votes_df, target_dept):
-    """Renders the voting UI for a specific department."""
+    """Renders the voting UI with a Red/Green split bar."""
     st.header(f"🗳️ {target_dept} Governance")
     
-    # Filter proposals for this Dept (Active only)
-    # We check 'Dept' matches AND 'Applied' is 0 (Active)
+    # Filter active proposals
     active_props = [p for p in proposals if p.get('Dept') == target_dept and str(p.get('Applied')) == '0']
     
     if not active_props:
@@ -874,30 +874,62 @@ def render_voting_section(user, proposals, votes_df, target_dept):
             c_desc, c_act = st.columns([3, 1])
             
             with c_desc:
-                st.subheader(f"{p['Type']}: {p['Item']}")
-                st.write(p['Description'])
-                st.caption(f"Ends: {p['End_Date']}")
+                st.subheader(f"{p.get('Type')}: {p.get('Item')}")
+                st.write(p.get('Description'))
+                st.caption(f"Ends: {p.get('End_Date')}")
                 
-                # Calculate Results
+                # --- 1. CALCULATE VOTES ---
                 if not votes_df.empty:
+                    votes_df['Proposal_ID'] = votes_df['Proposal_ID'].astype(str)
                     relevant_votes = votes_df[votes_df['Proposal_ID'] == p_id]
                     yes_count = len(relevant_votes[relevant_votes['Vote'] == 'YES'])
                     no_count = len(relevant_votes[relevant_votes['Vote'] == 'NO'])
                 else:
                     yes_count, no_count = 0, 0
                 
-                # Progress Bar
                 total = yes_count + no_count
+                
+                # --- 2. RENDER RED/GREEN BAR ---
                 if total > 0:
-                    yes_pct = yes_count / total
-                    st.progress(yes_pct, text=f"Yes: {yes_count} | No: {no_count}")
+                    # We use Graph Objects to build a custom stacked bar
+                    fig = go.Figure()
+                    
+                    # Green Bar (YES)
+                    fig.add_trace(go.Bar(
+                        y=[''], x=[yes_count], name='For', orientation='h',
+                        marker=dict(color='#228B22'), # Forest Green
+                        text=f"{yes_count}", textposition='auto', hoverinfo='name+x'
+                    ))
+                    
+                    # Red Bar (NO)
+                    fig.add_trace(go.Bar(
+                        y=[''], x=[no_count], name='Against', orientation='h',
+                        marker=dict(color='#D2042D'), # Cherry Red
+                        text=f"{no_count}", textposition='auto', hoverinfo='name+x'
+                    ))
+                    
+                    # Style it to look like a Progress Bar (No axes, tight margins)
+                    fig.update_layout(
+                        barmode='stack',
+                        xaxis=dict(showgrid=False, showticklabels=False, visible=False),
+                        yaxis=dict(showgrid=False, showticklabels=False, visible=False),
+                        showlegend=False,
+                        margin=dict(l=0, r=0, t=0, b=0),
+                        height=35, # Thin bar height
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        plot_bgcolor='rgba(0,0,0,0)'
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+                    st.caption(f"For: {yes_count} | Against: {no_count}")
                 else:
-                    st.write("No votes yet.")
+                    st.write("Waiting for first vote...")
 
             with c_act:
-                # 1. Check if User has already voted
+                # Check if User has already voted
                 user_has_voted = False
                 if not votes_df.empty:
+                    votes_df['Proposal_ID'] = votes_df['Proposal_ID'].astype(str)
                     user_vote = votes_df[
                         (votes_df['Proposal_ID'] == p_id) & 
                         (votes_df['Username'] == user['u'])
@@ -905,27 +937,37 @@ def render_voting_section(user, proposals, votes_df, target_dept):
                     if not user_vote.empty:
                         user_has_voted = True
                 
-                # 2. Render Buttons
+                # Buttons
                 if user_has_voted:
                     st.success("✅ Voted")
                 else:
                     c_y, c_n = st.columns(2)
                     if c_y.button("YES", key=f"y_{p_id}"):
-                        cast_vote_gsheet(p_id, user['u'], "YES")
-                        st.rerun()
+                        if cast_vote_gsheet(p_id, user['u'], "YES"):
+                            st.success("Voted YES")
+                            st.rerun()
                     if c_n.button("NO", key=f"n_{p_id}"):
-                        cast_vote_gsheet(p_id, user['u'], "NO")
-                        st.rerun()
+                        if cast_vote_gsheet(p_id, user['u'], "NO"):
+                            st.error("Voted NO")
+                            st.rerun()
                 
-                # 3. Admin "Apply" Button
-                # Only show if Admin AND vote is passing (simple majority)
+                # Admin Execute Button (Simple Majority)
                 if user.get('admin', False) and total > 0 and yes_count > no_count:
                     st.divider()
-                    if st.button("Execute & Close", key=f"exe_{p_id}"):
-                        if mark_proposal_applied(p_id):
+                    if st.button("Execute", key=f"exe_{p_id}"):
+                        # Mark 'Applied' = 1
+                        client = init_connection()
+                        sheet = client.open("TIC_Database_Master")
+                        ws = sheet.worksheet("Proposals")
+                        # Find row by ID
+                        cell = ws.find(p_id)
+                        if cell:
+                            # Assuming 'Applied' is the 7th column (G)
+                            ws.update_cell(cell.row, 7, 1)
                             st.success("Proposal Applied!")
+                            st.cache_data.clear()
                             st.rerun()
-
+                            
 def render_leaderboard(current_user):
     st.title("🏆 Trading Leaderboard")
     
@@ -2304,6 +2346,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
