@@ -274,8 +274,7 @@ def fetch_live_prices_with_change(tickers):
     except Exception as e:
         print(f"Ticker Error: {e}")
         return {}
-    
-@st.cache_data(ttl=3600*4) # Cache for 4 hours
+        
 @st.cache_data(ttl=3600*4)
 def fetch_real_benchmark_data(portfolio_df):
     """
@@ -355,8 +354,8 @@ def fetch_real_benchmark_data(portfolio_df):
     df_chart = df_chart.dropna().reset_index().rename(columns={'index':'Date'})
     return df_chart
     
-    @st.cache_data(ttl=60)
-    def load_data():
+@st.cache_data(ttl=60)
+def load_data():
     # --- 1. CONFIGURATION ---
     ROLE_MAP = {
         'ab': {'r': 'Advisory Board', 'd': 'Advisory', 's': 'Board', 'admin': False},
@@ -381,71 +380,60 @@ def fetch_real_benchmark_data(portfolio_df):
     f_port = get_data_from_sheet("Fundamentals")
     q_port = get_data_from_sheet("Quant")
     
-    # HELPER: Calculate Real-Time Fund Value (Robust Version)
+    # HELPER: Calculate Real-Time Fund Value
     def calculate_live_total(df):
         total_val = 0.0
-        
         if not df.empty:
-            # Normalize headers
             df.columns = df.columns.astype(str).str.lower().str.strip()
             
-            # 1. Identify the Ticker Column
+            # Identify Ticker Column
             ticker_col = None
             if 'ticker' in df.columns: ticker_col = 'ticker'
             elif 'model_id' in df.columns: ticker_col = 'model_id'
             
-            # 2. If no ticker column found, fallback to sheet total
+            # Fallback
             if not ticker_col:
-                if 'total' in df.columns:
-                    return clean_float(df['total'].iloc[0]), df
+                if 'total' in df.columns: return clean_float(df['total'].iloc[0]), df
                 return 0.0, df
 
-            # 3. Get Tickers (No Cash)
+            # Get Tickers
             tickers = [t for t in df[ticker_col].unique() if isinstance(t, str) and "CASH" not in t.upper()]
             
-            # 4. Fetch Live Prices
+            # Fetch Prices
             prices = fetch_live_prices_with_change(tickers)
             
-            # 5. Sum up (Equity * Price) + Cash
+            # Sum
             for index, row in df.iterrows():
                 ticker = str(row.get(ticker_col, ''))
-                # Handle varied column names for 'Units'
+                
+                # Get Units (handle varied column names)
                 units = 0.0
                 if 'units' in df.columns: units = clean_float(row.get('units', 0))
-                elif 'allocation' in df.columns: units = clean_float(row.get('allocation', 0)) # Fallback if Quant uses allocation as units
+                elif 'allocation' in df.columns: units = clean_float(row.get('allocation', 0))
                 
-                # Handle varied column names for 'Market Value'
+                # Get Sheet Value
                 sheet_val = 0.0
                 if 'market_value' in df.columns: sheet_val = clean_float(row.get('market_value', 0))
-                elif 'total' in df.columns: sheet_val = clean_float(row.get('total', 0)) # Fallback
+                elif 'total' in df.columns: sheet_val = clean_float(row.get('total', 0))
                 
                 if "CASH" in ticker.upper():
                     val = sheet_val
                 else:
                     live_price = prices.get(ticker, {}).get('price', 0.0)
-                    if live_price > 0 and units > 0:
-                        val = live_price * units
-                    else:
-                        val = sheet_val # Fallback
+                    val = (live_price * units) if live_price > 0 and units > 0 else sheet_val
                 
                 total_val += val
                 
         return total_val, df
 
-    # Calculate Live Totals
     f_total, f_port = calculate_live_total(f_port)
     q_total, q_port = calculate_live_total(q_port)
 
-    # Standardize Quant DataFrame for Charts (Ensure model_id exists)
+    # Normalize Quant Columns
     if not q_port.empty:
-        if 'ticker' in q_port.columns: 
-            q_port = q_port.rename(columns={'ticker': 'model_id'})
-        if 'target_weight' in q_port.columns: 
-            q_port = q_port.rename(columns={'target_weight': 'allocation'})
-        
-        # Ensure allocation is numeric
-        if 'allocation' in q_port.columns:
-            q_port['allocation'] = q_port['allocation'].apply(clean_float)
+        if 'ticker' in q_port.columns: q_port = q_port.rename(columns={'ticker': 'model_id'})
+        if 'target_weight' in q_port.columns: q_port = q_port.rename(columns={'target_weight': 'allocation'})
+        if 'allocation' in q_port.columns: q_port['allocation'] = q_port['allocation'].apply(clean_float)
 
     # --- 3. LOAD MEMBERS & CALCULATE NAV ---
     df_mem = get_data_from_sheet("Members")
@@ -455,9 +443,7 @@ def fetch_real_benchmark_data(portfolio_df):
     total_units_quant = 0.0
     
     if not df_mem.empty:
-        # Clean headers
         df_mem.columns = df_mem.columns.astype(str).str.strip()
-        
         if 'Units_Fund' in df_mem.columns:
             total_units_fund = pd.to_numeric(df_mem['Units_Fund'], errors='coerce').fillna(0).sum()
         if 'Units_Quant' in df_mem.columns:
@@ -479,6 +465,7 @@ def fetch_real_benchmark_data(portfolio_df):
             
             u_f = clean_float(row.get('Units_Fund', 0))
             u_q = clean_float(row.get('Units_Quant', 0))
+            
             real_value = (u_f * nav_fund) + (u_q * nav_quant)
             
             members_list.append({
@@ -524,7 +511,7 @@ def fetch_real_benchmark_data(portfolio_df):
 
     real_events = []
     if not f_port.empty and 'ticker' in f_port.columns:
-        tickers = [t for t in f_port['ticker'].dropna().unique() if isinstance(t,str) and "CASH" not in t]
+        tickers = [t for t in f_port['ticker'].dropna().unique() if isinstance(t,str) and "CASH" not in t.upper()]
         real_events = fetch_company_events(tickers)
     full_calendar = real_events + manual_events
 
@@ -2085,6 +2072,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
