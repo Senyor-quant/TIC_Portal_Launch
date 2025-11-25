@@ -453,6 +453,7 @@ def load_data():
 
     # Normalize Quant Columns
     if not q_port.empty:
+        q_port.columns = q_port.columns.astype(str).str.lower()
         if 'ticker' in q_port.columns: q_port = q_port.rename(columns={'ticker': 'model_id'})
         if 'target_weight' in q_port.columns: q_port = q_port.rename(columns={'target_weight': 'allocation'})
         if 'allocation' in q_port.columns: q_port['allocation'] = q_port['allocation'].apply(clean_float)
@@ -1897,8 +1898,6 @@ def render_fundamental_dashboard(user, portfolio, proposals):
 
 def render_quant_dashboard(user, portfolio, proposals):
     st.title(f"🤖 Quant Lab")
-    
-    # REPLACED: Moved from simple slider backtest to Monte Carlo Simulation
     with st.expander("🎲 Monte Carlo Risk Engine", expanded=True):
         c_param, c_plot = st.columns([1, 3])
         
@@ -1977,37 +1976,55 @@ def render_quant_dashboard(user, portfolio, proposals):
             c_s3.metric("Upside (95%)", f"{np.percentile(final_values, 95):.0f}")
 
     st.divider()
-    c1, c2 = st.columns([2,1])
+    # 2. Live Portfolio View
+    c1, c2 = st.columns([2, 1])
+    
     with c1:
-        st.subheader("Production Models")
+        st.subheader("Holdings by Model")
         
-        st.dataframe(
-            # FIX: Slice to keep only the first 4 columns (Model_ID, Allocation, Return, Status)
-            portfolio.iloc[:, :4],
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "model_id": st.column_config.TextColumn("Model Name"),
-                "allocation": st.column_config.ProgressColumn(
-                    "Allocation",
-                    format="%.2f",
-                    min_value=0,
-                    max_value=1,
-                ),
-                "ytd_return": st.column_config.NumberColumn(
-                    "YTD Return",
-                    format="%.1f%%"
-                ),
-                # Optional: Add nice formatting for the Status column if it exists
-                "status": st.column_config.TextColumn("Status")
-            }
-        )
-
+        if not portfolio.empty:
+            # Check if 'Model' column exists (Case insensitive)
+            model_col = 'model' if 'model' in portfolio.columns else None
+            
+            if model_col:
+                # GROUP BY MODEL
+                # We aggregate Market Value and calculate the new weights
+                grouped = portfolio.groupby(model_col)[['market_value']].sum().reset_index()
+                total_aum = grouped['market_value'].sum()
+                grouped['allocation'] = grouped['market_value'] / total_aum
+                
+                # Display the Grouped Table
+                st.dataframe(
+                    grouped,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        model_col: st.column_config.TextColumn("Strategy / Model"),
+                        "market_value": st.column_config.NumberColumn("Total Value", format="€%.2f"),
+                        "allocation": st.column_config.ProgressColumn("Allocation", format="%.2f%%", min_value=0, max_value=1)
+                    }
+                )
+            else:
+                st.warning("⚠️ 'Model' column missing in Quant Sheet. showing raw holdings.")
+                st.dataframe(portfolio, use_container_width=True)
+                
     with c2:
-        st.subheader("Allocation")
-        st.plotly_chart(px.pie(portfolio, values='allocation', names='model_id', hole=0.4), use_container_width=True)
-
-    st.divider()
+        st.subheader("Strategy Allocation")
+        if not portfolio.empty:
+            # If 'Model' exists, graph by Model. Else graph by Sector.
+            group_col = 'model' if 'model' in portfolio.columns else 'sector'
+            
+            if group_col in portfolio.columns:
+                # Plotly automatically handles the aggregation for the pie chart
+                fig = px.pie(
+                    portfolio, 
+                    values='market_value', 
+                    names=group_col, 
+                    hole=0.4,
+                    color_discrete_sequence=px.colors.qualitative.Bold
+                )
+                fig.update_traces(textposition='inside', textinfo='percent+label')
+                st.plotly_chart(fig, use_container_width=True)
 
 def render_inbox(user, messages, all_members_df):
     st.title("📬 Inbox")
@@ -2287,6 +2304,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
