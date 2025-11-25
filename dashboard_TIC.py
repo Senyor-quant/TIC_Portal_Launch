@@ -1001,7 +1001,7 @@ def render_admin_panel(user, members_df, f_port, q_port, total_aum):
     MEMBER_FILE_PATH = "data/Member List.xlsx"
     
     # 1. TABS
-    tab1, tab2, tab3, tab4 = st.tabs(["👥 Member Database", "💰 Treasury", "📄 Reporting", "✅ Attendance"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["👥 Member Database", "💰 Treasury", "📄 Reporting", "✅ Attendance", "🗳️ Governance"])
     
     # --- TAB 1: MEMBER DATABASE (READ/WRITE) ---
     with tab1:
@@ -1132,6 +1132,71 @@ def render_admin_panel(user, members_df, f_port, q_port, total_aum):
             st.session_state['attendance_df'] = edited_att
             st.success("Attendance records updated.")
         st.metric("Average Attendance Rate", "85%")
+        
+    # --- TAB 5: GOVERNANCE ---
+    with tab5:
+        st.subheader("Proposal Archive & Live Results")
+        
+        if not proposals:
+            st.info("No proposals found in database.")
+        else:
+            # 1. Aggregate Votes
+            summary_data = []
+            for p in proposals:
+                p_id = str(p['ID'])
+                
+                # Filter votes for this specific proposal
+                if not votes_df.empty:
+                    # Ensure types match for filtering
+                    votes_df['Proposal_ID'] = votes_df['Proposal_ID'].astype(str)
+                    p_votes = votes_df[votes_df['Proposal_ID'] == p_id]
+                    yes = len(p_votes[p_votes['Vote'] == 'YES'])
+                    no = len(p_votes[p_votes['Vote'] == 'NO'])
+                else:
+                    yes, no = 0, 0
+                
+                # Determine Status Label
+                status = "🔴 Applied/Closed" if str(p.get('Applied')) == '1' else "🟢 Active"
+                
+                summary_data.append({
+                    "ID": p_id,
+                    "Type": p.get('Type'),
+                    "Item": p.get('Item'),
+                    "Dept": p.get('Dept'),
+                    "✅ Yes": yes,
+                    "❌ No": no,
+                    "Total": yes + no,
+                    "Status": status
+                })
+            
+            # 2. Display as Interactive Table
+            df_summary = pd.DataFrame(summary_data)
+            st.dataframe(
+                df_summary, 
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Status": st.column_config.TextColumn(
+                        "Status", 
+                        help="0=Active, 1=Applied",
+                        width="medium"
+                    ),
+                    "Total": st.column_config.ProgressColumn(
+                        "Engagement", 
+                        format="%d", 
+                        min_value=0, 
+                        max_value=len(members_df)
+                    )
+                }
+            )
+            
+            st.divider()
+            st.markdown("#### 🔎 Detailed Vote Log")
+            with st.expander("View Individual Votes"):
+                if not votes_df.empty:
+                    st.dataframe(votes_df, use_container_width=True, hide_index=True)
+                else:
+                    st.write("No votes cast yet.")
 
 def render_ticker_tape(data_dict):
     """Renders a ticker tape using the delta from the last hour."""
@@ -1875,10 +1940,11 @@ def main():
     elif nav == "Inbox": render_inbox(user, msgs, members)
     elif nav == "Library": render_documents(user)
     elif nav == "Settings": render_offboarding(user)
-    elif nav == "Admin Panel": render_admin_panel(user, members, f_port, q_port, total_aum  =f_total + q_total)
+    elif nav == "Admin Panel": render_admin_panel(user, members, f_port, q_port, total_aum = f_total + q_total, props, df_votes)
 
 if __name__ == "__main__":
     main()
+
 
 
 
