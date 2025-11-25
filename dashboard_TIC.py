@@ -1899,23 +1899,25 @@ def render_offboarding(user):
             new_p1 = st.text_input("New Password", type="password")
             new_p2 = st.text_input("Confirm New Password", type="password")
             
-            if st.form_submit_button("Update Password"):
-                # Validation Logic
+            if st.form_submit_button("Update Password", type="primary"):
+                # Validation
                 if current_p != user['p']:
                     st.error("❌ Incorrect current password.")
                 elif new_p1 != new_p2:
                     st.error("❌ New passwords do not match.")
                 elif len(new_p1) < 4:
-                    st.warning("⚠️ Password is too short.")
+                    st.warning("⚠️ Password is too short (min 4 chars).")
                 else:
-                   if update_member_field_in_gsheet(user['u'], "Password", new_p1):
+                    # Save to Google Sheet
+                    if update_member_field_in_gsheet(user['u'], "Password", new_p1):
                         st.success("✅ Password updated successfully!")
                         st.info("Logging you out to re-authenticate...")
-                       
-                        time.sleep(2) # Give user time to read the success message
+                        
+                        # --- FORCE LOGOUT SEQUENCE ---
+                        time.sleep(2)
                         st.session_state.clear()
                         st.rerun()
-                     else:
+                    else:
                         st.error("❌ Update failed. Database error.")
             
 def render_simulation(user):
@@ -2650,6 +2652,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
