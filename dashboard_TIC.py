@@ -1557,15 +1557,15 @@ def render_fundamental_dashboard(user, portfolio, proposals):
             st.plotly_chart(fig_tree, use_container_width=True)
     st.divider()
     st.header("🗳️ Active Proposals")
-    props = [p for p in proposals if p['Dept'] == 'Fundamental']
-    for p in props:
+    current_props = [p for p in proposals if p.get('Dept') == 'Fundamental']
+    
+    for p in current_props:
         with st.container(border=True):
             c_a, c_b = st.columns([4, 1])
-            c_a.subheader(f"{p['type']} {p['item']}")
-            c_a.write(p['desc'])
-            c_a.caption(f"Closes: {p['end']}")
-            c_b.metric("Votes", p['for'])
-            if c_b.button("Vote YES", key=f"f_{p['id']}"): st.toast("Vote Recorded")
+            c_a.subheader(f"{p.get('Type')}: {p.get('Item')}")
+            c_a.write(p.get('Description'))
+            c_a.caption(f"Closes: {p.get('End_Date')}")
+            c_b.metric("Votes", "TBD")
 
 def render_quant_dashboard(user, portfolio, proposals):
     st.title(f"🤖 Quant Lab")
@@ -1681,12 +1681,16 @@ def render_quant_dashboard(user, portfolio, proposals):
 
     st.divider()
     st.header("🗳️ Governance")
-    props = [p for p in proposals if p['dept'] == 'Quant']
-    for p in props:
+    current_props = [p for p in proposals if p.get('Dept') == 'Quant']
+    for p in current_props:
         with st.container(border=True):
-            st.subheader(f"⚙️ {p['item']}")
-            st.write(p['desc'])
-            if st.button("Deploy", key=f"q_{p['id']}"): st.toast("Deployment Triggered")
+            # FIX: Use .get('Type') and .get('Item')
+            st.subheader(f"{p.get('Type')}: {p.get('Item')}")
+            st.write(p.get('Description'))
+            
+            # (Optional) Keep the deploy button if it's distinct from voting
+            if st.button("Deploy", key=f"q_{p.get('ID')}"): 
+                st.toast("Deployment Triggered")
 
 def render_inbox(user, messages, all_members_df):
     st.title("📬 Inbox")
@@ -1944,6 +1948,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
