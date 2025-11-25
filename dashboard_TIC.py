@@ -13,6 +13,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import plotly.graph_objects as go
 import streamlit.components.v1 as components
+import time
 
 # --- GOOGLE SHEETS CONNECTION SETUP ---
 SCOPES = [
@@ -34,21 +35,43 @@ def init_connection():
         return None
 
 def get_data_from_sheet(worksheet_name):
-    """Helper to fetch all records from a specific tab."""
+    """Robust fetcher with Retry Logic for 429 Quota Errors."""
     client = init_connection()
     if not client: return pd.DataFrame()
     
-    try:
-        # Open the Master Sheet
-        sheet = client.open("TIC_Database_Master")
-        # Open the specific tab (Worksheet)
-        worksheet = sheet.worksheet(worksheet_name)
-        # Get all values
-        data = worksheet.get_all_records()
-        return pd.DataFrame(data)
-    except Exception as e:
-        st.error(f"Error reading tab '{worksheet_name}': {e}")
-        return pd.DataFrame()
+    # Try up to 3 times
+    for attempt in range(3):
+        try:
+            sheet = client.open("TIC_Database_Master")
+            worksheet = sheet.worksheet(worksheet_name)
+            data = worksheet.get_all_values()
+            
+            if not data: return pd.DataFrame()
+
+            headers = data.pop(0)
+            df = pd.DataFrame(data, columns=headers)
+            
+            # Clean empty columns
+            df = df.loc[:, [h != "" for h in headers]]
+            return df
+            
+        except Exception as e:
+            error_msg = str(e)
+            if "429" in error_msg or "Quota exceeded" in error_msg:
+                # If it's a speed limit error, wait and try again
+                wait_time = (attempt + 1) * 2 # Wait 2s, then 4s, then 6s
+                time.sleep(wait_time)
+                continue
+            elif "WorksheetNotFound" in error_msg:
+                # Don't retry if sheet is missing
+                return pd.DataFrame()
+            else:
+                # Real error
+                st.error(f"Error reading '{worksheet_name}': {e}")
+                return pd.DataFrame()
+                
+    st.error(f"Failed to load '{worksheet_name}' after retries. Google API busy.")
+    return pd.DataFrame()
 
 # ==========================================
 # 1. CONFIGURATION & STYLE
@@ -2469,6 +2492,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
