@@ -1159,6 +1159,23 @@ def render_valuation_sandbox():
 
 def render_calendar_view(user, all_events):
     st.title("🗓️ Smart Calendar")
+    # Filter for market events in the future
+    today = datetime.now()
+    future_market = [e for e in all_events if e.get('type') == 'market' and 
+                     datetime.strptime(e['date'], '%Y-%m-%d') >= today]
+    
+    if future_market:
+        # Sort by date
+        future_market.sort(key=lambda x: x['date'])
+        next_event = future_market[0]
+        days_left = (datetime.strptime(next_event['date'], '%Y-%m-%d') - today).days + 1
+        
+        # Visual Countdown
+        st.info(f"🔔 **Next Major Event:** {next_event['ticker']} Earnings in **{days_left} days** ({next_event['date']})")
+        # Progress bar representing "urgency" (closer = fuller)
+        urgency = max(0, min(1.0, 1 - (days_left / 30)))
+        st.progress(urgency, text="Urgency Level")
+    
     st.caption(f"Showing events for: {user['n']} ({user['d']} Dept)")
     
     col_opt, col_cal = st.columns([1, 3])
@@ -2085,7 +2102,20 @@ def render_fundamental_dashboard(user, portfolio, proposals):
             fig_tree.update_traces(hovertemplate='<b>%{label}</b><br>Weight: %{value:.1%}<br>Change: %{customdata[0]:.2f}%')
             
             st.plotly_chart(fig_tree, use_container_width=True)
+
+            # CONCENTRATION CHECK
+        if not portfolio.empty and 'target_weight' in portfolio.columns:
+        # Group by Sector
+        sector_alloc = portfolio.groupby('sector')['target_weight'].sum().sort_values(ascending=False)
+        top_sector = sector_alloc.index[0]
+        top_weight = sector_alloc.iloc[0]
+        
+        if top_weight > 0.30: # 30% Threshold
+            st.warning(f"⚠️ High Concentration: {top_sector} makes up {top_weight:.1%} of the portfolio.")
+        else:
+            st.success(f"✅ Portfolio is well-diversified. Top sector: {top_sector} ({top_weight:.1%})")
     st.divider()
+    
     st.header("🗳️ Active Proposals")
     current_props = [p for p in proposals if p.get('Dept') == 'Fundamental']
     
@@ -2551,6 +2581,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
