@@ -327,7 +327,7 @@ def load_data():
     members_list = []
 
     # --- 2. LOAD EXTERNAL MEMBER LIST ---
-    file_path = r"C:\Users\senyo\OneDrive\Desktop\Y4S1\TIC\Member List.xlsx"
+    file_path = "data/Member List.xlsx"
 
     if os.path.exists(file_path):
         try:
@@ -376,7 +376,7 @@ def load_data():
     members = pd.DataFrame(members_list)
 
     # --- 3. OTHER DATA (Portfolios) ---
-    portfolio_path = r"C:\Users\senyo\OneDrive\Desktop\Y4S1\TIC\TIC_Portfolios.xlsx"
+    portfolio_path = "data/TIC_Portfolios.xlsx"
     
     fund_portfolio = pd.DataFrame(columns=['ticker', 'name', 'sector', 'target_weight', 'total'])
     quant_portfolio = pd.DataFrame(columns=['model_id', 'allocation', 'ytd_return', 'total'])
@@ -410,7 +410,7 @@ def load_data():
 
     # --- 4. MESSAGES & EVENTS ---
     messages = []
-    msg_path = r"C:\Users\senyo\OneDrive\Desktop\Y4S1\TIC\TIC_Messages.xlsx"
+    msg_path = "data/TIC_Messages.xlsx"
     if os.path.exists(msg_path):
         try:
             df_msg = pd.read_excel(msg_path, engine='openpyxl')
@@ -437,7 +437,7 @@ def load_data():
         real_market_events = fetch_company_events(fund_tickers)
 
     # 2. Load Internal/Macro Events from Excel
-    events_path = r"C:\Users\senyo\OneDrive\Desktop\Y4S1\TIC\TIC_Events.xlsx"
+    events_path = "data/TIC_Events.xlsx"
     manual_events = []
     
     if os.path.exists(events_path):
@@ -465,7 +465,7 @@ def load_data():
 # 3. HELPER FUNCTIONS
 # ==========================================
 # Define the absolute path for the member list, consistent with the user's setup
-MEMBER_FILE_PATH = r"C:\Users\senyo\OneDrive\Desktop\Y4S1\TIC\Member List.xlsx"
+MEMBER_FILE_PATH = "data/Member List.xlsx"
 def update_member_fields_in_excel_bulk(usernames, updates_dict):
     """Reads the member file, updates multiple fields for multiple users, and saves the file."""
     if not os.path.exists(MEMBER_FILE_PATH):
@@ -545,7 +545,7 @@ def create_pdf_report(fund_port, quant_port):
     return pdf.output(dest='S').encode('latin-1')
 
 def send_new_message(from_user, to_user, subject, body):
-    file_path = r"C:\Users\senyo\OneDrive\Desktop\Y4S1\TIC\TIC_Messages.xlsx"
+    file_path = "data/TIC_Messages.xlsx"
     
     new_data = {
         'ID': int(datetime.now().timestamp()), # Simple unique ID
@@ -824,7 +824,7 @@ def render_admin_panel(user, members_df, f_port, q_port, total_aum):
     st.info(f"Logged in as: {user['n']} ({user['r']})")
     
     # Define Path for saving member list
-    MEMBER_FILE_PATH = r"C:\Users\senyo\OneDrive\Desktop\Y4S1\TIC\Member List.xlsx"
+    MEMBER_FILE_PATH = "data/Member List.xlsx"
     
     # 1. TABS
     tab1, tab2, tab3, tab4 = st.tabs(["👥 Member Database", "💰 Treasury", "📄 Reporting", "✅ Attendance"])
@@ -1486,7 +1486,7 @@ def render_documents(user):
         with st.container(border=True):
             st.markdown(f"### Digital Agreement: {user['n']}")
             
-            CONTRACTS_FOLDER = r"C:\Users\senyo\OneDrive\Desktop\Y4S1\TIC\contracts"
+            CONTRACTS_FOLDER = "data/contracts"
             contract_filename = f"{user['u']}_contract.pdf"
             contract_path = os.path.join(CONTRACTS_FOLDER, contract_filename)
             
