@@ -9,6 +9,44 @@ import base64
 import feedparser 
 import os 
 import calendar 
+import gspread
+from google.oauth2.service_account import Credentials
+
+# --- GOOGLE SHEETS CONNECTION SETUP ---
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
+
+@st.cache_resource
+def init_connection():
+    """Authenticates with Google Sheets using Streamlit Secrets."""
+    try:
+        # Load credentials from secrets.toml
+        creds = Credentials.from_service_account_info(
+            st.secrets["gcp_service_account"], scopes=SCOPES
+        )
+        return gspread.authorize(creds)
+    except Exception as e:
+        st.error(f"⚠️ Failed to connect to Google Sheets: {e}")
+        return None
+
+def get_data_from_sheet(worksheet_name):
+    """Helper to fetch all records from a specific tab."""
+    client = init_connection()
+    if not client: return pd.DataFrame()
+    
+    try:
+        # Open the Master Sheet
+        sheet = client.open("TIC_Database_Master")
+        # Open the specific tab (Worksheet)
+        worksheet = sheet.worksheet(worksheet_name)
+        # Get all values
+        data = worksheet.get_all_records()
+        return pd.DataFrame(data)
+    except Exception as e:
+        st.error(f"Error reading tab '{worksheet_name}': {e}")
+        return pd.DataFrame()
 
 # ==========================================
 # 1. CONFIGURATION & STYLE
@@ -307,9 +345,10 @@ def fetch_real_benchmark_data(portfolio_df):
 
     return df_chart
 
-@st.cache_data
+@st.cache_data(ttl=60) # Cache for 1 min to keep data fresh
 def load_data():
     # --- 1. CONFIGURATION & MAPPING ---
+    # (Keep your existing ROLE_MAP here... exact same as before)
     ROLE_MAP = {
         'ab': {'r': 'Advisory Board', 'd': 'Advisory', 's': 'Board', 'admin': False},
         'qr': {'r': 'Quant Researcher', 'd': 'Quant', 's': 'Quant Research', 'admin': False},
@@ -325,214 +364,220 @@ def load_data():
     }
 
     members_list = []
+    
+    # --- 2. LOAD MEMBERS (FROM GOOGLE SHEETS) ---
+    df_external = get_data_from_sheet("Members")
+    
+    if not df_external.empty:
+        for index, row in df_external.iterrows():
+            # ... (Keep your EXACT member parsing logic from before) ...
+            # Just ensure column names match your Google Sheet headers (Case Sensitive!)
+            role_code = str(row.get('Role', 'other')).strip().lower()
+            role_data = ROLE_MAP.get(role_code, {'r': 'Member', 'd': 'General', 's': 'General', 'admin': False})
+            
+            full_name = str(row.get('Name', 'Unknown')).strip()
+            username = full_name.lower().replace(" ", ".")
+            email = str(row.get('Email', f"{username}@tilburg.edu")).strip()
+            if email == 'nan' or email == '': email = f"{username}@tilburg.edu"
+            
+            # Liq Pending Logic
+            try:
+                liq_val = int(row.get('Liq Pending', 0))
+            except:
+                liq_val = 0
 
-    # --- 2. LOAD EXTERNAL MEMBER LIST ---
-    file_path = "data/Member List.xlsx"
-
-    if os.path.exists(file_path):
-        try:
-            df_external = pd.read_excel(file_path, engine='openpyxl')
-
-            for index, row in df_external.iterrows():
-                role_code = str(row.get('Role', 'other')).strip().lower()
-                role_data = ROLE_MAP.get(role_code, {'r': 'Member', 'd': 'General', 's': 'General', 'admin': False})
-
-                full_name = str(row.get('Name', 'Unknown')).strip()
-                username = full_name.lower().replace(" ", ".")
-                email = str(row.get('Email', f"{username}@tilburg.edu")).strip()
-                if email == 'nan' or email == '': email = f"{username}@tilburg.edu"
-                
-                # FIX: Safely handle NaN values (float) before conversion to int(0 or 1)
-                raw_liq_val = row.get('Liq Pending', 0)
-                
-                if pd.isna(raw_liq_val):
-                    liq_pending_val = 0
-                else:
-                    liq_pending_val = int(raw_liq_val)
-
-                member = {
-                    'u': username,
-                    'p': str(row.get('Password', 'pass')).strip(),
-                    'n': full_name,
-                    'email': email,
-                    'r': role_data['r'],
-                    'd': role_data['d'],
-                    's': role_data['s'],
-                    'admin': role_data.get('admin', False),
-                    'status': 'Pending' if liq_pending_val == 1 else 'Active',
-                    'liq_pending': liq_pending_val, 
-                    'contribution': float(row.get('Initial Investment', 0)),
-                    'value': float(row.get('Current value', 0)),
-                    'contract_text': "TIC MEMBERSHIP AGREEMENT 2024-2025..."
-                }
-                members_list.append(member)
-        except Exception as e:
-            st.error(f"Error reading member list: {e}")
-            members_list = [{'u': 'admin', 'p': 'pass', 'n': 'System Admin', 'r': 'Admin', 'd': 'Board', 's': 'Tech', 'admin': True, 'contribution': 0, 'value': 0}]
+            member = {
+                'u': username,
+                'p': str(row.get('Password', 'pass')).strip(),
+                'n': full_name,
+                'email': email,
+                'r': role_data['r'],
+                'd': role_data['d'],
+                's': role_data['s'],
+                'admin': role_data.get('admin', False),
+                'status': 'Pending' if liq_val == 1 else 'Active',
+                'liq_pending': liq_val,
+                'contribution': float(row.get('Initial Investment', 0)),
+                'value': float(row.get('Current value', 0)),
+                'contract_text': "TIC MEMBERSHIP..."
+            }
+            members_list.append(member)
     else:
-        st.warning(f"Member file not found at: {file_path}")
-        members_list = [{'u': 'flavian', 'p': 'pass', 'n': 'Flavian', 'r': 'President', 'd': 'Board', 's': 'Management', 'admin': True, 'contribution': 2500, 'value': 2950}]
+        # Fallback if sheet is empty or connection fails
+        members_list = [{'u': 'admin', 'p': 'pass', 'n': 'Offline Admin', 'r': 'Admin', 'd': 'Board', 's': 'Tech', 'admin': True, 'contribution': 0, 'value': 0, 'liq_pending': 0}]
 
     members = pd.DataFrame(members_list)
 
-    # --- 3. OTHER DATA (Portfolios) ---
-    portfolio_path = "data/TIC_Portfolios.xlsx"
+    # --- 3. LOAD PORTFOLIOS ---
+    fund_portfolio = get_data_from_sheet("Fundamentals")
+    quant_portfolio = get_data_from_sheet("Quant")
     
-    fund_portfolio = pd.DataFrame(columns=['ticker', 'name', 'sector', 'target_weight', 'total'])
-    quant_portfolio = pd.DataFrame(columns=['model_id', 'allocation', 'ytd_return', 'total'])
+    # Clean columns
+    fund_portfolio.columns = fund_portfolio.columns.str.lower()
+    quant_portfolio.columns = quant_portfolio.columns.str.lower()
     
-    # NEW: Variables to store totals
+    # Extract Totals (Assuming 'total' column exists in Sheet)
     f_total = 0.0
+    if 'total' in fund_portfolio.columns and not fund_portfolio.empty:
+        val = fund_portfolio['total'].iloc[0]
+        f_total = float(val) if val != '' else 0.0
+
     q_total = 0.0
+    if 'total' in quant_portfolio.columns and not quant_portfolio.empty:
+        val = quant_portfolio['total'].iloc[0]
+        q_total = float(val) if val != '' else 0.0
 
-    if os.path.exists(portfolio_path):
-        try:
-            # Read Fundamentals
-            fund_portfolio = pd.read_excel(portfolio_path, sheet_name='Fundamentals', engine='openpyxl')
-            fund_portfolio.columns = fund_portfolio.columns.str.lower()
-            # Extract Total from first row
-            if 'total' in fund_portfolio.columns:
-                val = fund_portfolio['total'].iloc[0]
-                if not pd.isna(val): f_total = float(val)
+    # --- 4. LOAD MESSAGES & EVENTS ---
+    # Load messages (convert column names to lowercase for compatibility)
+    raw_msgs = get_data_from_sheet("Messages")
+    raw_msgs.columns = raw_msgs.columns.str.lower()
+    messages = raw_msgs.to_dict('records')
+    
+    # Load events
+    raw_events = get_data_from_sheet("Events")
+    manual_events = []
+    if not raw_events.empty:
+        raw_events['Date'] = pd.to_datetime(raw_events['Date']).dt.strftime('%Y-%m-%d')
+        for _, row in raw_events.iterrows():
+            manual_events.append({
+                'title': str(row['Title']),
+                'ticker': str(row['Ticker']),
+                'date': str(row['Date']),
+                'type': str(row['Type']).lower(),
+                'audience': str(row['Audience'])
+            })
 
-            # Read Quant
-            quant_portfolio = pd.read_excel(portfolio_path, sheet_name='Quant', engine='openpyxl')
-            quant_portfolio.columns = quant_portfolio.columns.str.lower()
-            # Extract Total from first row
-            if 'total' in quant_portfolio.columns:
-                val = quant_portfolio['total'].iloc[0]
-                if not pd.isna(val): q_total = float(val)
-                
-        except Exception as e:
-            st.error(f"Error reading Portfolio Excel: {e}")
-    else:
-        st.warning("Portfolio file not found. Using empty data.")
-
-    # --- 4. MESSAGES & EVENTS ---
-    messages = []
-    msg_path = "data/TIC_Messages.xlsx"
-    if os.path.exists(msg_path):
-        try:
-            df_msg = pd.read_excel(msg_path, engine='openpyxl')
-            # Convert DataFrame to list of dicts for the app
-            messages = df_msg.to_dict('records')
-            
-            # Standardize keys to lowercase just in case
-            messages = [{k.lower(): v for k, v in m.items()} for m in messages]
-        except:
-            messages = []
-    
-    proposals = [
-        {'id': 101, 'dept': 'Fundamental', 'item': 'AMD', 'type': 'BUY', 'desc': 'Undervalued competitor.', 'end': '2023-12-10', 'for': 3, 'against': 0},
-        {'id': 102, 'dept': 'Quant', 'item': 'Kill RMS-Prop', 'type': 'MODEL_CHANGE', 'desc': 'Underperformance.', 'end': '2023-12-15', 'for': 1, 'against': 1}
-    ]
-    
-   # --- DYNAMIC CALENDAR GENERATION ---
-    today = datetime.now()
-    
-    # 1. Fetch Real Market Events (Earnings)
+    # --- DYNAMIC CALENDAR (Keep your Earnings Logic) ---
     real_market_events = []
     if not fund_portfolio.empty and 'ticker' in fund_portfolio.columns:
         fund_tickers = fund_portfolio['ticker'].dropna().unique().tolist()
         real_market_events = fetch_company_events(fund_tickers)
-
-    # 2. Load Internal/Macro Events from Excel
-    events_path = "data/TIC_Events.xlsx"
-    manual_events = []
-    
-    if os.path.exists(events_path):
-        try:
-            df_events = pd.read_excel(events_path, engine='openpyxl')
-            # Standardize date format to string 'YYYY-MM-DD'
-            df_events['Date'] = pd.to_datetime(df_events['Date']).dt.strftime('%Y-%m-%d')
-            
-            for _, row in df_events.iterrows():
-                manual_events.append({
-                    'title': str(row['Title']),
-                    'ticker': str(row['Ticker']),
-                    'date': str(row['Date']),
-                    'type': str(row['Type']).lower(),
-                    'audience': str(row['Audience'])
-                })
-        except Exception as e:
-            st.error(f"Error reading Events Excel: {e}")
-    
-    # 3. Combine All
+        
     full_calendar = real_market_events + manual_events
+    proposals = [] # Placeholder
 
     return members, fund_portfolio, quant_portfolio, messages, proposals, full_calendar, f_total, q_total
+    
 # ==========================================
 # 3. HELPER FUNCTIONS
 # ==========================================
 # Define the absolute path for the member list, consistent with the user's setup
-MEMBER_FILE_PATH = "data/Member List.xlsx"
-def update_member_fields_in_excel_bulk(usernames, updates_dict):
-    """Reads the member file, updates multiple fields for multiple users, and saves the file."""
-    if not os.path.exists(MEMBER_FILE_PATH):
-        st.error("Error: Cannot find member file to update.")
-        return False
-        
+def update_member_field_in_gsheet(username, field_name, new_value):
+    """
+    Surgical update: Finds specific user and updates one specific cell.
+    Best for: User actions (Cancel Request, Confirm Request).
+    """
+    client = init_connection()
+    if not client: return False
+    
     try:
-        df = pd.read_excel(MEMBER_FILE_PATH, engine='openpyxl')
+        sheet = client.open("TIC_Database_Master")
+        ws = sheet.worksheet("Members")
         
-        # 1. Create a transient 'u' (username) column for matching
+        # 1. Get all data to find the row index efficiently
+        data = ws.get_all_records()
+        df = pd.DataFrame(data)
+        
+        # Normalize username for matching
         df['u'] = df['Name'].astype(str).str.lower().str.strip().str.replace(' ', '.')
         
-        # 2. Iterate through all target usernames
-        for username in usernames:
-            user_index = df[df['u'] == username].index
-            
-            if not user_index.empty:
-                # 3. Apply the dictionary of updates (e.g., {'Liq Pending': 0, 'Liq approved': 1})
-                for field, value in updates_dict.items():
-                    df.loc[user_index, field] = value
+        # Find the row index (Add 2: +1 for 0-based index, +1 for Header row)
+        matches = df.index[df['u'] == username].tolist()
         
-        # 4. Clean up and save
-        df = df.drop(columns=['u'])
-        df.to_excel(MEMBER_FILE_PATH, index=False, engine='openpyxl')
-        st.cache_data.clear() 
+        if matches:
+            row_idx = matches[0] + 2 
+            
+            # Find Column Index
+            # We read the first row (headers) to find where 'Liq Pending' is
+            headers = ws.row_values(1) 
+            try:
+                col_idx = headers.index(field_name) + 1
+            except ValueError:
+                st.error(f"Column '{field_name}' not found in Sheet.")
+                return False
+                
+            # Update the specific cell
+            ws.update_cell(row_idx, col_idx, new_value)
+            st.cache_data.clear()
+            return True
+        else:
+            st.error(f"User {username} not found.")
+            return False
+            
+    except Exception as e:
+        st.error(f"GSheet Update Error: {e}")
+        return False
+        
+def send_new_message_gsheet(from_user, to_user, subject, body):
+    """Appends a new message row to the 'Messages' tab."""
+    client = init_connection()
+    if not client: return False
+    
+    try:
+        sheet = client.open("TIC_Database_Master")
+        ws = sheet.worksheet("Messages")
+        
+        new_row = [
+            int(datetime.now().timestamp()), # ID
+            datetime.now().strftime("%Y-%m-%d %H:%M"), # Timestamp
+            from_user,
+            to_user,
+            subject,
+            body,
+            "False" # Read
+        ]
+        
+        ws.append_row(new_row)
         return True
     except Exception as e:
-        # Catch file locked error
-        st.error(f"Error updating member Excel in bulk: {e}. Is the file open?")
-        return False
+        st.error(f"Message send failed: {e}")
+        return False    
+
+def update_member_fields_in_gsheet_bulk(usernames, updates_dict):
+    """
+    Batch update: Downloads sheet, modifies multiple rows in Pandas, overwrites sheet.
+    Best for: Admin actions (Approve 5 people at once).
+    """
+    client = init_connection()
+    if not client: return False
     
-def update_member_field_in_excel(username, field, value, file_path=MEMBER_FILE_PATH):
-    """
-    Reads the member file, updates a single user's field, and saves the file.
-    Note: Requires the user to re-log or manually trigger cache clear to see the change reflected fully.
-    """
-    if not os.path.exists(file_path):
-        st.error("Error: Cannot find member file to update.")
-        return False
-        
     try:
-        df = pd.read_excel(file_path, engine='openpyxl')
+        sheet = client.open("TIC_Database_Master")
+        ws = sheet.worksheet("Members")
         
-        # 1. Create a transient 'u' (username) column for matching the logged-in user
-        # This matches the logic used in load_data
+        # 1. READ: Get everything into a DataFrame
+        data = ws.get_all_records()
+        df = pd.DataFrame(data)
+        
+        # Create temp username column
         df['u'] = df['Name'].astype(str).str.lower().str.strip().str.replace(' ', '.')
         
-        # 2. Find the row index of the user
-        user_index = df[df['u'] == username].index
+        # 2. MODIFY: Apply updates in memory
+        rows_affected = 0
+        for user in usernames:
+            if user in df['u'].values:
+                for field, value in updates_dict.items():
+                    if field in df.columns:
+                        df.loc[df['u'] == user, field] = value
+                        rows_affected += 1
         
-        if not user_index.empty:
-            # 3. Update the required field (e.g., 'Liq Pending')
-            df.loc[user_index, field] = value
-            
-            # 4. Remove transient column and save
-            df = df.drop(columns=['u'])
-            df.to_excel(file_path, index=False, engine='openpyxl')
-            
-            # IMPORTANT: We must clear the data cache so load_data re-reads the file next time.
-            st.cache_data.clear() 
-            return True
-        return False
+        # 3. CLEAN: Drop the temp column
+        df_final = df.drop(columns=['u'])
+        
+        # 4. WRITE: Clear sheet and push new data
+        # This is safer/faster than updating 50 individual cells via API
+        ws.clear()
+        # Prepare data list: [Headers] + [Rows]
+        update_data = [df_final.columns.values.tolist()] + df_final.values.tolist()
+        ws.update(range_name="A1", values=update_data)
+        
+        st.cache_data.clear()
+        return True
 
     except Exception as e:
-        st.error(f"Error updating member Excel: {e}. Is the file open in Excel?")
+        st.error(f"Bulk Update Error: {e}")
         return False
-    
+        
 def authenticate(username, password, df):
     user = df[(df['u'] == username) & (df['p'] == password)]
     return user.iloc[0] if not user.empty else None
@@ -907,7 +952,7 @@ def render_admin_panel(user, members_df, f_port, q_port, total_aum):
                 # APPROVE: Liq Pending = 0, Liq Approved = 1
                 updates = {'Liq Pending': 0, 'Liq Approved': 1}
                 # Call the helper function to update the Excel file
-                if update_member_fields_in_excel_bulk(selected_usernames, updates):
+                if update_member_fields_in_gsheet_bulk(selected_usernames, updates):
                     st.success(f"✅ Approved {len(selected_usernames)} requests. Please clear cache (or restart) to update.")
                 else:
                     st.error("❌ Approval failed. Check file permissions.")
@@ -917,7 +962,7 @@ def render_admin_panel(user, members_df, f_port, q_port, total_aum):
             if c_b.button("Deny Selected", disabled=not selected_usernames):
                 # DENY: Liq Pending = 0, Liq Approved = 0 (Clears pending state)
                 updates = {'Liq Pending': 0, 'Liq Approved': 0}
-                if update_member_fields_in_excel_bulk(selected_usernames, updates):
+                if update_member_fields_in_gsheet_bulk(selected_usernames, updates):
                     st.info(f"Requests for {len(selected_usernames)} users denied and cleared.")
                 else:
                     st.error("❌ Denial failed.")
@@ -1109,7 +1154,7 @@ def render_offboarding(user):
             
             # Button to REQUEST liquidation (sets Liq Pending to 1)
             if st.button("Confirm Liquidation Request", type="primary", disabled=not agree):
-                if update_member_field_in_excel(user['u'], 'Liq Pending', 1):
+                if update_member_field_in_gsheet(user['u'], 'Liq Pending', 1):
                     # FIX: Manually update session state before rerunning
                     st.session_state['user']['liq_pending'] = 1
                     st.session_state['user']['status'] = 'Pending' 
@@ -1125,7 +1170,7 @@ def render_offboarding(user):
             
             # Button to CANCEL liquidation (sets Liq Pending back to 0)
             if st.button("Cancel Request"):
-                if update_member_field_in_excel(user['u'], 'Liq Pending', 0):
+                if update_member_field_in_gsheet(user['u'], 'Liq Pending', 0):
                     # FIX: Manually update session state before rerunning
                     st.session_state['user']['liq_pending'] = 0
                     st.session_state['user']['status'] = 'Active'
@@ -1650,3 +1695,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
