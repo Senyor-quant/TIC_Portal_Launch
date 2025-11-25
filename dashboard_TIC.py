@@ -12,6 +12,7 @@ import calendar
 import gspread
 from google.oauth2.service_account import Credentials
 import plotly.graph_objects as go
+import streamlit.components.v1 as components
 
 # --- GOOGLE SHEETS CONNECTION SETUP ---
 SCOPES = [
@@ -555,7 +556,41 @@ def load_data():
 # ==========================================
 # 3. HELPER FUNCTIONS
 # ==========================================
-
+def mark_message_read_gsheet(message_id, username):
+    """Appends username to the 'Read' column for a specific message."""
+    client = init_connection()
+    if not client: return False
+    
+    try:
+        sheet = client.open("TIC_Database_Master")
+        ws = sheet.worksheet("Messages")
+        
+        # 1. Find the Row by ID (Column 1)
+        cell = ws.find(str(message_id), in_column=1)
+        
+        if cell:
+            # 2. Get current 'Read' value (Column 7 based on your structure)
+            # We assume ID, Date, From, To, Subj, Body, READ
+            read_col_index = 7 
+            current_val = ws.cell(cell.row, read_col_index).value
+            
+            # 3. Check if already read
+            if not current_val:
+                new_val = username
+            elif username not in current_val:
+                new_val = f"{current_val}, {username}"
+            else:
+                return True # Already read
+            
+            # 4. Update
+            ws.update_cell(cell.row, read_col_index, new_val)
+            st.cache_data.clear()
+            return True
+        return False
+    except Exception as e:
+        st.error(f"Read mark failed: {e}")
+        return False
+        
 def cast_vote_gsheet(proposal_id, username, vote_choice):
     """Records a YES/NO vote in the 'Votes' tab."""
     client = init_connection()
@@ -2055,13 +2090,31 @@ def render_quant_dashboard(user, portfolio, proposals):
                 st.plotly_chart(fig, use_container_width=True)
 
 def render_inbox(user, messages, all_members_df):
-    st.title("📬 Inbox")
+    # --- 1. FILTER MESSAGES FOR CURRENT USER ---
+    my_msgs = [
+        m for m in messages 
+        if m['to_user'] == user['u'] 
+        or m['to_user'] == 'all'
+        or m['to_user'] == user['d']
+    ]
     
-    # 1. BOARD/ADMIN: Compose Section
+    # Calculate Unread Count logic
+    unread_count = 0
+    for m in my_msgs:
+        read_list = str(m.get('read', ''))
+        if user['u'] not in read_list:
+            unread_count += 1
+
+    # Title with Badge
+    if unread_count > 0:
+        st.title(f"📬 Inbox ({unread_count})")
+    else:
+        st.title("📬 Inbox")
+
+    # --- 2. BOARD/ADMIN: COMPOSE SECTION ---
     if user.get('admin', False):
         with st.expander("✍️ Compose Message (Board Only)", expanded=False):
             with st.form("send_msg"):
-                # Create smart dropdown options
                 # 1. Special Broadcast Groups
                 options = ["ALL MEMBERS", "Quant Team", "Fundamental Team"]
                 # 2. Add individual users
@@ -2079,45 +2132,71 @@ def render_inbox(user, messages, all_members_df):
                     elif target == "Fundamental Team": final_target = "Fundamental"
                     else: final_target = target
                     
-                    if send_new_message(user['u'], final_target, subj, body):
+                    # CALL THE GOOGLE SHEET HELPER
+                    if send_new_message_gsheet(user['u'], final_target, subj, body):
                         st.success("Message Sent!")
+                        st.cache_data.clear() # Clear cache to show new message immediately
                         st.rerun()
                     else:
-                        st.error("Could not write to Excel file.")
+                        st.error("Could not write to database.")
 
     st.divider()
 
-    # 2. EVERYONE: View Messages
-    # Filter logic: Show if 'to_user' matches ME, or 'all', or my DEPT
-    my_msgs = [
-        m for m in messages 
-        if m['to_user'] == user['u'] 
-        or m['to_user'] == 'all'
-        or m['to_user'] == user['d']
-    ]
-    
-    # Sort by date (newest first)
-    my_msgs.sort(key=lambda x: x['timestamp'], reverse=True)
+    # --- 3. VIEW MESSAGES ---
+    # Sort by date (newest first). We assume ID is incremental or timestamp based
+    my_msgs.sort(key=lambda x: str(x.get('timestamp', '')), reverse=True)
     
     if not my_msgs: 
         st.info("No messages in your inbox.")
         return
-        
+
     for m in my_msgs:
+        # Check Read Status for THIS user
+        read_str = str(m.get('read', ''))
+        is_read = user['u'] in read_str
+        
         # Visual distinction for Broadcasts vs Direct
         is_broadcast = (m['to_user'] in ['all', 'Quant', 'Fundamental'])
-        border_color = "#D4AF37" if not is_broadcast else "rgba(49, 51, 63, 0.2)"
-        icon = "📢" if is_broadcast else "📩"
         
-        with st.container(border=True):
-            c_top, c_time = st.columns([4, 1])
-            c_top.markdown(f"**{icon} {m['subject']}**")
-            c_time.caption(f"{m['timestamp']}")
+        # Dynamic Styling
+        border_style = "1px solid #D4AF37" if not is_read else "1px solid rgba(49, 51, 63, 0.2)"
+        bg_color = "rgba(212, 175, 55, 0.1)" if not is_read else "transparent"
+        
+        # Icon Logic
+        if not is_read:
+            icon = "✉️" # Unread
+        elif is_broadcast:
+            icon = "📢" # Read Broadcast
+        else:
+            icon = "📩" # Read Direct
+        
+        # Render Message Card
+        with st.container():
+            st.markdown(
+                f"""
+                <div style="border: {border_style}; background-color: {bg_color}; padding: 15px; border-radius: 8px; margin-bottom: 10px;">
+                    <div style="display:flex; justify-content:space-between;">
+                        <span style="font-weight:bold; font-size:1.1em;">{icon} {m.get('subject','No Subject')}</span>
+                        <span style="font-size:0.8em; opacity:0.7;">{m.get('timestamp','')}</span>
+                    </div>
+                    <div style="font-size:0.9em; opacity:0.8; margin-bottom:5px;">
+                        From: <b>{m.get('from_user')}</b> | To: {m.get('to_user')}
+                    </div>
+                    <hr style="margin: 5px 0; opacity: 0.2;">
+                    <div style="margin-top: 10px; white-space: pre-wrap;">{m.get('body','')}</div>
+                </div>
+                """, 
+                unsafe_allow_html=True
+            )
             
-            st.write(m['body'])
-            st.caption(f"From: {m['from_user']} | To: {m['to_user']}")
-
-import streamlit.components.v1 as components
+            # Mark as Read Button (Only show if currently unread)
+            if not is_read:
+                # We use a unique key for every button based on message ID
+                if st.button("Mark as Read", key=f"read_{m.get('id')}"):
+                    # Call the GSheet Read Helper
+                    # Assuming 'id' column exists (ensure your sheet has an 'ID' column)
+                    if mark_message_read_gsheet(m.get('id'), user['u']):
+                        st.rerun()
 
 def render_documents(user):
     st.title("📚 Library")
@@ -2332,6 +2411,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
