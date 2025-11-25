@@ -355,10 +355,8 @@ def fetch_real_benchmark_data(portfolio_df):
     df_chart = df_chart.dropna().reset_index().rename(columns={'index':'Date'})
     return df_chart
     
-@st.cache_data(ttl=60) # Cache for 1 min to keep data fresh
+@st.cache_data(ttl=60)
 def load_data():
-    # --- 1. CONFIGURATION & MAPPING ---
-    # (Keep your existing ROLE_MAP here... exact same as before)
     ROLE_MAP = {
         'ab': {'r': 'Advisory Board', 'd': 'Advisory', 's': 'Board', 'admin': False},
         'qr': {'r': 'Quant Researcher', 'd': 'Quant', 's': 'Quant Research', 'admin': False},
@@ -373,33 +371,32 @@ def load_data():
         'other': {'r': 'Member', 'd': 'General', 's': 'General', 'admin': False},
     }
 
+    # Helper to clean numbers
+    def clean_float(val):
+        if pd.isna(val) or val == '': return 0.0
+        if isinstance(val, (int, float)): return float(val)
+        try: return float(str(val).replace('€', '').replace(',', '').replace(' ', ''))
+        except: return 0.0
+
     members_list = []
     
-    # --- 2. LOAD MEMBERS (FROM GOOGLE SHEETS) ---
-    df_external = get_data_from_sheet("Members")
-    
-    if not df_external.empty:
-        for index, row in df_external.iterrows():
-            # ... (Keep your EXACT member parsing logic from before) ...
-            # Just ensure column names match your Google Sheet headers (Case Sensitive!)
+    # 1. LOAD MEMBERS
+    df_mem = get_data_from_sheet("Members")
+    if not df_mem.empty:
+        for _, row in df_mem.iterrows():
             role_code = str(row.get('Role', 'other')).strip().lower()
             role_data = ROLE_MAP.get(role_code, {'r': 'Member', 'd': 'General', 's': 'General', 'admin': False})
+            name = str(row.get('Name', 'Unknown')).strip()
+            uname = name.lower().replace(" ", ".")
+            email = str(row.get('Email', f"{uname}@tilburg.edu")).strip()
             
-            full_name = str(row.get('Name', 'Unknown')).strip()
-            username = full_name.lower().replace(" ", ".")
-            email = str(row.get('Email', f"{username}@tilburg.edu")).strip()
-            if email == 'nan' or email == '': email = f"{username}@tilburg.edu"
+            try: raw_liq = row.get('Liq Pending', 0); liq_val = int(float(raw_liq)) if raw_liq != '' else 0
+            except: liq_val = 0
             
-            # Liq Pending Logic
-            try:
-                liq_val = int(row.get('Liq Pending', 0))
-            except:
-                liq_val = 0
-
-            member = {
-                'u': username,
+            members_list.append({
+                'u': uname,
                 'p': str(row.get('Password', 'pass')).strip(),
-                'n': full_name,
+                'n': name,
                 'email': email,
                 'r': role_data['r'],
                 'd': role_data['d'],
@@ -407,64 +404,60 @@ def load_data():
                 'admin': role_data.get('admin', False),
                 'status': 'Pending' if liq_val == 1 else 'Active',
                 'liq_pending': liq_val,
-                'contribution': float(row.get('Initial Investment', 0)),
-                'value': float(row.get('Current value', 0)),
+                'contribution': clean_float(row.get('Initial Investment', 0)),
+                'value': clean_float(row.get('Current value', 0)),
                 'contract_text': "TIC MEMBERSHIP..."
-            }
-            members_list.append(member)
+            })
     else:
-        # Fallback if sheet is empty or connection fails
-        members_list = [{'u': 'admin', 'p': 'pass', 'n': 'Offline Admin', 'r': 'Admin', 'd': 'Board', 's': 'Tech', 'admin': True, 'contribution': 0, 'value': 0, 'liq_pending': 0}]
-
+        members_list = [{'u': 'admin', 'p': 'pass', 'n': 'Offline Admin', 'r': 'Admin', 'd': 'Board', 'admin': True, 'liq_pending': 0, 'contribution':0, 'value':0}]
+    
     members = pd.DataFrame(members_list)
 
-    # --- 3. LOAD PORTFOLIOS ---
-    fund_portfolio = get_data_from_sheet("Fundamentals")
-    quant_portfolio = get_data_from_sheet("Quant")
+    # 2. LOAD PORTFOLIOS & TOTALS
+    f_port = get_data_from_sheet("Fundamentals")
+    q_port = get_data_from_sheet("Quant")
     
-    # Clean columns
-    fund_portfolio.columns = fund_portfolio.columns.str.lower()
-    quant_portfolio.columns = quant_portfolio.columns.str.lower()
-    
-    # Extract Totals (Assuming 'total' column exists in Sheet)
     f_total = 0.0
-    if 'total' in fund_portfolio.columns and not fund_portfolio.empty:
-        val = fund_portfolio['total'].iloc[0]
-        f_total = float(val) if val != '' else 0.0
+    if not f_port.empty: 
+        f_port.columns = f_port.columns.astype(str).str.lower()
+        if 'target_weight' in f_port.columns: f_port['target_weight'] = f_port['target_weight'].apply(clean_float)
+        if 'total' in f_port.columns: f_total = clean_float(f_port['total'].iloc[0])
 
     q_total = 0.0
-    if 'total' in quant_portfolio.columns and not quant_portfolio.empty:
-        val = quant_portfolio['total'].iloc[0]
-        q_total = float(val) if val != '' else 0.0
+    if not q_port.empty:
+        q_port.columns = q_port.columns.astype(str).str.lower()
+        if 'ticker' in q_port.columns: q_port = q_port.rename(columns={'ticker': 'model_id'})
+        if 'target_weight' in q_port.columns: q_port = q_port.rename(columns={'target_weight': 'allocation'})
+        if 'allocation' in q_port.columns: q_port['allocation'] = q_port['allocation'].apply(clean_float)
+        if 'total' in q_port.columns: q_total = clean_float(q_port['total'].iloc[0])
+        if 'ytd_return' not in q_port.columns: q_port['ytd_return'] = 0.0
 
-    # --- 4. LOAD MESSAGES & EVENTS ---
-    # Load messages (convert column names to lowercase for compatibility)
-    raw_msgs = get_data_from_sheet("Messages")
-    raw_msgs.columns = raw_msgs.columns.str.lower()
-    messages = raw_msgs.to_dict('records')
+    # 3. MESSAGES
+    msgs = get_data_from_sheet("Messages")
+    if not msgs.empty: msgs.columns = msgs.columns.str.lower()
+    messages = msgs.to_dict('records') if not msgs.empty else []
     
-    # Load events
-    raw_events = get_data_from_sheet("Events")
+    # 4. EVENTS (CALENDAR)
+    evts = get_data_from_sheet("Events")
     manual_events = []
-    if not raw_events.empty:
-        raw_events['Date'] = pd.to_datetime(raw_events['Date']).dt.strftime('%Y-%m-%d')
-        for _, row in raw_events.iterrows():
+    if not evts.empty:
+        evts['Date'] = pd.to_datetime(evts['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
+        for _, row in evts.iterrows():
             manual_events.append({
-                'title': str(row['Title']),
-                'ticker': str(row['Ticker']),
-                'date': str(row['Date']),
-                'type': str(row['Type']).lower(),
-                'audience': str(row['Audience'])
+                'title': str(row.get('Title','')),
+                'ticker': str(row.get('Ticker','')),
+                'date': str(row.get('Date','')),
+                'type': str(row.get('Type','')).lower(),
+                'audience': str(row.get('Audience','all'))
             })
 
-    # --- DYNAMIC CALENDAR (Keep your Earnings Logic) ---
-    real_market_events = []
-    if not fund_portfolio.empty and 'ticker' in fund_portfolio.columns:
-        fund_tickers = fund_portfolio['ticker'].dropna().unique().tolist()
-        real_market_events = fetch_company_events(fund_tickers)
-        
-    full_calendar = real_market_events + manual_events
+    real_events = []
+    if not f_port.empty and 'ticker' in f_port.columns:
+        tickers = [t for t in f_port['ticker'].dropna().unique() if isinstance(t,str) and "CASH" not in t]
+        real_events = fetch_company_events(tickers)
     
+    full_calendar = real_events + manual_events
+
     # 5. VOTING SYSTEM (PROPOSALS & VOTES)
     # Load Proposals
     df_props = get_data_from_sheet("Proposals")
@@ -478,8 +471,8 @@ def load_data():
     if not df_votes.empty:
         df_votes['Proposal_ID'] = df_votes['Proposal_ID'].astype(str)
 
-    return members, fund_portfolio, quant_portfolio, messages, proposals, full_calendar, f_total, q_total, df_votes
-    
+    # RETURN 9 VALUES
+    return members, f_port, q_port, messages, proposals, full_calendar, f_total, q_total, df_votes    
 # ==========================================
 # 3. HELPER FUNCTIONS
 # ==========================================
@@ -1886,6 +1879,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
