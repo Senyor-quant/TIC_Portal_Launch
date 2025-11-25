@@ -516,15 +516,29 @@ def load_data():
             u_q = clean_float(row.get('Units_Quant', 0))
             real_value = (u_f * nav_fund) + (u_q * nav_quant)
             
+            # --- NEW: Extract Last Login from Sheet ---
+            last_active = str(row.get('Last Login', 'Never'))
+
             members_list.append({
-                'u': uname, 'p': str(row.get('Password', 'pass')).strip(), 'n': name, 'email': email,
-                'r': role_data['r'], 'd': role_data['d'], 's': role_data['s'], 'admin': role_data.get('admin', False),
-                'status': 'Pending' if liq_val == 1 else 'Active', 'liq_pending': liq_val,
+                'u': uname, 
+                'p': str(row.get('Password', 'pass')).strip(), 
+                'n': name, 
+                'email': email,
+                'r': role_data['r'], 
+                'd': role_data['d'], 
+                's': role_data['s'], 
+                'admin': role_data.get('admin', False),
+                'status': 'Pending' if liq_val == 1 else 'Active', 
+                'liq_pending': liq_val,
                 'contribution': clean_float(row.get('Initial Investment', 0)),
-                'value': real_value, 'units_fund': u_f, 'units_quant': u_q,
+                'value': real_value, 
+                'units_fund': u_f, 
+                'units_quant': u_q,
+                'last_login': last_active, # <--- ADD THIS LINE
                 'contract_text': "TIC MEMBERSHIP..."
             })
         members = pd.DataFrame(members_list)
+        
     else:
         # Fallback Admin
         members = pd.DataFrame([{'u': 'admin', 'p': 'pass', 'n': 'Offline Admin', 'r': 'Admin', 'd': 'Board', 'admin': True, 'value': 0}])
@@ -1360,13 +1374,14 @@ def render_admin_panel(user, members_df, f_port, q_port, f_total, q_total, propo
         if 'members_db' not in st.session_state: st.session_state['members_db'] = members_df
         
         edited_df = st.data_editor(
-            st.session_state['members_db'][['n', 'email', 'r', 'd', 's', 'contribution', 'value', 'status']],
+            st.session_state['members_db'][['n', 'email', 'r', 'd', 's', 'contribution', 'value', 'status', 'last_login']],
             num_rows="dynamic", 
             use_container_width=True,
             column_config={
-                "contribution": st.column_config.NumberColumn("Invested (€)", format="€%.2f"),
-                "value": st.column_config.NumberColumn("Value (€)", format="€%.2f")
-            }
+                    "last_login": st.column_config.TextColumn("Last Active", disabled=True),
+                    "contribution": st.column_config.NumberColumn("Invested (€)", format="€%.2f"),
+                    "value": st.column_config.NumberColumn("Value (€)", format="€%.2f")
+                }
         )
         
         if st.button("Save Database Changes"):
@@ -2518,6 +2533,11 @@ def main():
                     if user is not None:
                         st.session_state['user'] = user.to_dict()
                         st.session_state['logged_in'] = True
+
+                        # Update Google Sheet with current timestamp
+                        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+                        # We use the existing helper function
+                        update_member_field_in_gsheet(user['u'], "Last Login", timestamp)
                         
                         # Time-aware greeting logic (from previous suggestion)
                         h = datetime.now().hour
@@ -2661,7 +2681,7 @@ def main():
     elif nav == "Simulation": 
         t_sim, t_lead = st.tabs(["🎮 Trade", "🏆 Leaderboard"])
         with t_sim: render_simulation(user)
-        with t_lead: render_leaderboard(user) 
+        with t_lead: render_leaderboard(user, members) 
     elif nav == "Calendar": render_calendar_view(user, calendar_events)
     elif "Inbox" in nav: render_inbox(user, msgs, members)
     elif nav == "Library": render_documents(user)
@@ -2690,6 +2710,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
