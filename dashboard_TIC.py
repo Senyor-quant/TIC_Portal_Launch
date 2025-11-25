@@ -1557,7 +1557,7 @@ def render_fundamental_dashboard(user, portfolio, proposals):
             st.plotly_chart(fig_tree, use_container_width=True)
     st.divider()
     st.header("🗳️ Active Proposals")
-    props = [p for p in proposals if p['dept'] == 'Fundamental']
+    props = [p for p in proposals if p['Dept'] == 'Fundamental']
     for p in props:
         with st.container(border=True):
             c_a, c_b = st.columns([4, 1])
