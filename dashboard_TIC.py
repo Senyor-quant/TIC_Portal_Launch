@@ -555,7 +555,8 @@ def load_data():
     att = get_data_from_sheet("Attendance")
     if not att.empty:
         # Standardize date format for easier filtering
-        att['Date'] = pd.to_datetime(att['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
+        if 'Date' in att.columns:
+            att['Date'] = pd.to_datetime(att['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
     else:
         # Fallback structure if empty
         att = pd.DataFrame(columns=['Date', 'Member', 'Status', 'Reason'])
@@ -2470,6 +2471,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
