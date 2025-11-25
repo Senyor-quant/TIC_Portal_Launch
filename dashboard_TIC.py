@@ -335,7 +335,7 @@ def fetch_real_benchmark_data(portfolio_df):
         # Normalize to 100
         df_chart['SP500'] = (sp500 / sp500.iloc[0]) * 100
     except Exception as e:
-        print(f"Benchmark Error: {e}")
+        # print(f"Benchmark Error: {e}")
         df_chart['SP500'] = 100.0
 
     # 3. Fetch TIC Portfolio History
@@ -394,7 +394,7 @@ def fetch_real_benchmark_data(portfolio_df):
                 df_chart['TIC_Fund'] = 100.0
                 
         except Exception as e:
-            print(f"Portfolio Gen Error: {e}")
+            # print(f"Portfolio Gen Error: {e}")
             df_chart['TIC_Fund'] = 100.0
     else:
         df_chart['TIC_Fund'] = 100.0
@@ -1298,7 +1298,7 @@ def render_upcoming_events_sidebar(all_events):
 def render_admin_panel(user, members_df, f_port, q_port, f_total, q_total, proposals, votes_df, nav_f, nav_q, attendance_df):
     st.title("🔒 Admin Console")
     st.info(f"Logged in as: {user['n']} ({user['r']})")
-    # 1. TABS
+    # TABS
     tabs = ["👥 Member Database", "💰 Treasury", "📄 Reporting", "✅ Attendance", "🗳️ Governance"]
     if 'admin_active_tab' not in st.session_state:
         st.session_state['admin_active_tab'] = tabs[0]
@@ -1458,6 +1458,58 @@ def render_admin_panel(user, members_df, f_port, q_port, f_total, q_total, propo
 
         else:
             st.info("✅ No pending liquidation requests.")
+
+        st.divider()
+        st.subheader("📉 Market History Snapshot")
+        st.caption("Record today's NAV and AUM to the history sheet for the performance graph.")
+        
+        if st.button("📸 Record Daily Snapshot"):
+            with st.spinner("Fetching live data and saving..."):
+                try:
+                    # 1. Get Live SP500 Price
+                    sp500_ticker = yf.Ticker("^GSPC")
+                    hist = sp500_ticker.history(period="1d")
+                    sp500_price = hist['Close'].iloc[-1] if not hist.empty else 0.0
+                    
+                    # 2. Prepare Row Data
+                    today_str = datetime.now().strftime('%Y-%m-%d')
+                    new_row = [
+                        today_str,
+                        round(nav_f, 2),      # Passed into function
+                        round(nav_q, 2),      # Passed into function
+                        round(f_total + q_total, 2), # Calculated Total
+                        round(sp500_price, 2)
+                    ]
+                    
+                    # 3. Connect & Write
+                    client = init_connection()
+                    sheet = client.open("TIC_Database_Master")
+                    ws_hist = sheet.worksheet("Market_History")
+                    
+                    # --- DUPLICATE CHECK LOGIC ---
+                    # Get all dates currently in the sheet (Column 1)
+                    existing_dates = ws_hist.col_values(1)
+                    
+                    if today_str in existing_dates:
+                        # UPDATE EXISTING ROW
+                        # gspread rows are 1-indexed.
+                        # If date is at list index 5, it's in row 6 of the sheet (1 header + 5 data?)
+                        # Actually: col_values includes header. So list index + 1 = Row Number.
+                        row_idx = existing_dates.index(today_str) + 1
+                        
+                        # Update the cells A{row}:E{row}
+                        range_name = f"A{row_idx}:E{row_idx}"
+                        ws_hist.update(range_name=range_name, values=[new_row])
+                        st.warning(f"Updated existing snapshot for {today_str}.")
+                    else:
+                        # APPEND NEW ROW
+                        ws_hist.append_row(new_row)
+                        st.success(f"Snapshot saved for {today_str}!")
+                    
+                    st.cache_data.clear() # Refresh so the graph updates immediately
+                    
+                except Exception as e:
+                    st.error(f"Snapshot failed: {e}")
         pass
 
     # --- TAB 3: REPORTING ---
@@ -2499,6 +2551,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
