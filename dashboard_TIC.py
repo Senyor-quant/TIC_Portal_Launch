@@ -1171,7 +1171,7 @@ def render_upcoming_events_sidebar(all_events):
         </div>
         """, unsafe_allow_html=True)
 
-def render_admin_panel(user, members_df, f_port, q_port, total_aum, proposals, votes_df, nav_f, nav_q):
+def render_admin_panel(user, members_df, f_port, q_port, f_total, q_total, proposals, votes_df, nav_f, nav_q):
     st.title("🔒 Admin Console")
     st.info(f"Logged in as: {user['n']} ({user['r']})")
     
@@ -1264,7 +1264,7 @@ def render_admin_panel(user, members_df, f_port, q_port, total_aum, proposals, v
         c1.metric("Cash Balance", "€12,450.00", "+€500")
         c2.metric("Pending Payouts", "€0.00")
         # DYNAMIC AUM: Uses the passed argument
-        c3.metric("Total AUM", f"€{total_aum:,.2f}")
+        c3.metric("Total AUM", f"€{f_total + q_total:,.2f}")
         
         st.divider()
         st.subheader("Liquidation Queue")
@@ -2260,7 +2260,7 @@ def main():
     elif nav == "Inbox": render_inbox(user, msgs, members)
     elif nav == "Library": render_documents(user)
     elif nav == "Settings": render_offboarding(user)
-    elif nav == "Admin Panel": render_admin_panel(user, members, f_port, q_port, f_total + q_total, props, df_votes, nav_f, nav_q)
+    elif nav == "Admin Panel": render_admin_panel(user, members, f_port, q_port, f_total, q_total, props, df_votes, nav_f, nav_q)
 
     # PROFESSIONAL FOOTER
     st.markdown("---")
@@ -2272,6 +2272,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
