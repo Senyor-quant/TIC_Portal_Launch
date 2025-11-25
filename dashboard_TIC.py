@@ -1478,14 +1478,22 @@ def render_fundamental_dashboard(user, portfolio, proposals):
     st.title(f"📈 Fundamental Dashboard")
     
     #DOWNLOAD BUTTON
-    with st.expander("📥 Export Data"):
-        csv = portfolio.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            "Download Portfolio (CSV)",
-            csv,
-            "tic_fundamentals.csv",
-            "text/csv",
-            key='download-fund'
+    with st.expander("📊 View Raw Portfolio Data"):
+        st.dataframe(
+            portfolio,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "market_value": st.column_config.NumberColumn(
+                    "Value",
+                    format="€%.2f",
+                ),
+                "target_weight": st.column_config.NumberColumn(
+                    "Weight",
+                    format="%.2f%%"
+                ),
+                "ticker": st.column_config.TextColumn("Asset"),
+            }
         )
     
     st.subheader("Performance vs Market (6 Months)")
@@ -1680,17 +1688,6 @@ def render_quant_dashboard(user, portfolio, proposals):
         st.plotly_chart(px.pie(portfolio, values='allocation', names='model_id', hole=0.4), use_container_width=True)
 
     st.divider()
-    st.header("🗳️ Governance")
-    current_props = [p for p in proposals if p.get('Dept') == 'Quant']
-    for p in current_props:
-        with st.container(border=True):
-            # FIX: Use .get('Type') and .get('Item')
-            st.subheader(f"{p.get('Type')}: {p.get('Item')}")
-            st.write(p.get('Description'))
-            
-            # (Optional) Keep the deploy button if it's distinct from voting
-            if st.button("Deploy", key=f"q_{p.get('ID')}"): 
-                st.toast("Deployment Triggered")
 
 def render_inbox(user, messages, all_members_df):
     st.title("📬 Inbox")
@@ -1946,8 +1943,17 @@ def main():
     elif nav == "Settings": render_offboarding(user)
     elif nav == "Admin Panel": render_admin_panel(user, members, f_port, q_port, f_total + q_total, props, df_votes)
 
+    # PROFESSIONAL FOOTER
+    st.markdown("---")
+    c_foot1, c_foot2 = st.columns(2)
+    with c_foot1:
+        st.caption("© 2025 Tilburg Investment Club | Internal Portal v1.0")
+    with c_foot2:
+        st.caption("Data provided by Yahoo Finance & TIC Research Team")
+
 if __name__ == "__main__":
     main()
+
 
 
 
