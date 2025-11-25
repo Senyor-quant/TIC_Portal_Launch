@@ -2322,7 +2322,13 @@ def main():
         st.caption(f"NAV Quant: €{nav_q:.2f}")
         st.divider()
         
-        menu = ["Simulation", "Inbox", "Library", "Calendar", "Settings"] 
+        user_msgs = [m for m in msgs if m['to_user'] in [user['u'], 'all', user['d']]]
+        unread_count = sum(1 for m in user_msgs if user['u'] not in str(m.get('read', '')))
+        
+        # Create dynamic label
+        inbox_label = f"Inbox ({unread_count})" if unread_count > 0 else "Inbox"
+        
+        menu = ["Simulation", inbox_label, "Library", "Calendar", "Settings"] 
 
         # Board AND Advisory Board AND Dept Heads see Dashboards
         if user['d'] in ['Fundamental', 'Quant', 'Board', 'Advisory']:
@@ -2396,7 +2402,7 @@ def main():
         with t_sim: render_simulation(user)
         with t_lead: render_leaderboard(user) 
     elif nav == "Calendar": render_calendar_view(user, calendar_events)
-    elif nav == "Inbox": render_inbox(user, msgs, members)
+    elif "Inbox" in nav: render_inbox(user, msgs, members)
     elif nav == "Library": render_documents(user)
     elif nav == "Settings": render_offboarding(user)
     elif nav == "Admin Panel": render_admin_panel(user, members, f_port, q_port, f_total, q_total, props, df_votes, nav_f, nav_q)
@@ -2411,6 +2417,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
