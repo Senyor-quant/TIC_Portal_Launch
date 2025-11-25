@@ -1333,22 +1333,33 @@ def render_admin_panel(user, members_df, f_port, q_port, f_total, q_total, propo
         st.subheader("Generate Official Reports")
         st.caption("Creates a PDF snapshot of the current portfolio state, AUM, and governance log.")
         
-        with st.form("gen_report"):
-            report_title = st.text_input("Report Title", value=f"Status Report - {datetime.now().strftime('%B %Y')}")
-            
-            if st.form_submit_button("Generate PDF"):
-                # FIX: Pass 'proposals' to the function
+        # 1. Inputs (No Form)
+        report_title = st.text_input("Report Title", value=f"Status Report - {datetime.now().strftime('%B %Y')}")
+        
+        # 2. Generate Button
+        if st.button("📄 Prepare PDF Report"):
+            with st.spinner("Generating PDF..."):
+                # Generate and save to Session State
                 pdf_bytes = create_enhanced_pdf_report(
                     f_port, q_port, 
                     f_total, q_total, 
                     nav_f, nav_q, 
                     report_title,
-                    proposals # <--- NEW ARGUMENT
+                    proposals
                 )
-                
-                fname = f"TIC_Report_{datetime.now().strftime('%Y%m%d')}.pdf"
-                st.success("✅ Report generated successfully!")
-                st.download_button("📥 Download PDF", pdf_bytes, fname, "application/pdf")
+                st.session_state['generated_pdf_data'] = pdf_bytes
+                st.success("Report Ready!")
+
+        # 3. Download Button (Shows only if report exists in memory)
+        if 'generated_pdf_data' in st.session_state:
+            fname = f"TIC_Report_{datetime.now().strftime('%Y%m%d')}.pdf"
+            
+            st.download_button(
+                label="📥 Download PDF",
+                data=st.session_state['generated_pdf_data'],
+                file_name=fname,
+                mime="application/pdf"
+            )
     
     # --- TAB 4: ATTENDANCE ---
     with tab4:
@@ -2272,6 +2283,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
