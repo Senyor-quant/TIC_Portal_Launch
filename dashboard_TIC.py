@@ -1323,14 +1323,35 @@ def render_fundamental_dashboard(user, portfolio, proposals):
         st.plotly_chart(fig_pie, use_container_width=True)
     with c2:
         st.subheader("Sector Performance")
-        portfolio['mock_return'] = np.random.uniform(-15, 25, size=len(portfolio))
-        fig_tree = px.treemap(
-            portfolio, path=[px.Constant("Portfolio"), 'sector', 'ticker'], 
-            values='target_weight', color='mock_return',
-            color_continuous_scale='RdYlGn', color_continuous_midpoint=0
-        )
-        st.plotly_chart(fig_tree, use_container_width=True)
-
+        # --- FIX: REAL DATA LOGIC ---
+        if not portfolio.empty and 'ticker' in portfolio.columns:
+            # 1. Get tickers (excluding Cash handled by fetch_live...)
+            tickers = portfolio['ticker'].dropna().unique().tolist()
+            
+            # 2. Fetch Real Change %
+            live_data = fetch_live_prices_with_change(tickers)
+            
+            # 3. Map the 'pct' change to the dataframe
+            # We use a lambda to look up the ticker in the live_data dict
+            portfolio['real_return'] = portfolio['ticker'].map(
+                lambda t: live_data.get(str(t), {}).get('pct', 0.0)
+            )
+            
+            # 4. Plot with Real Data
+            fig_tree = px.treemap(
+                portfolio, 
+                path=[px.Constant("Portfolio"), 'sector', 'ticker'], 
+                values='target_weight', 
+                color='real_return', # <--- NOW USES REAL DATA
+                color_continuous_scale='RdYlGn', # Red to Green
+                color_continuous_midpoint=0,     # 0% is the center (Yellow/White)
+                hover_data=['real_return']       # Show the % on hover
+            )
+            
+            # Update hover label to look nice
+            fig_tree.update_traces(hovertemplate='<b>%{label}</b><br>Weight: %{value:.1%}<br>Change: %{customdata[0]:.2f}%')
+            
+            st.plotly_chart(fig_tree, use_container_width=True)
     st.divider()
     st.header("🗳️ Active Proposals")
     props = [p for p in proposals if p['dept'] == 'Fundamental']
@@ -1701,5 +1722,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
