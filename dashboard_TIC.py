@@ -295,82 +295,86 @@ def fetch_live_prices_with_change(tickers):
         
 @st.cache_data(ttl=3600*4)
 def fetch_real_benchmark_data(portfolio_df):
-    """
-    Calculates a Weighted Return Index (Growth of 100) to avoid currency mixing issues.
-    """
     end = datetime.now()
     start = end - timedelta(days=180)
     
-    # 1. Setup the DataFrame with Dates
-    # We assume business days (B) to align markets roughly
+    # 1. Setup the DataFrame with Dates (Business Days)
     dates = pd.date_range(start=start, end=end, freq='B')
     df_chart = pd.DataFrame(index=dates)
     
     # 2. Fetch Benchmark (S&P 500)
     try:
         sp500 = yf.download('^GSPC', start=start, end=end, progress=False)['Close']
-        # Normalize to 100 (Growth of $100)
-        if not sp500.empty:
-            df_chart['SP500'] = (sp500 / sp500.iloc[0]) * 100
-    except:
+        # Reindex to match our specific date range
+        sp500 = sp500.reindex(dates, method='ffill')
+        # Normalize to 100
+        df_chart['SP500'] = (sp500 / sp500.iloc[0]) * 100
+    except Exception as e:
+        print(f"Benchmark Error: {e}")
         df_chart['SP500'] = 100.0
 
-    # 3. Fetch TIC Portfolio
+    # 3. Fetch TIC Portfolio History
     if not portfolio_df.empty and 'ticker' in portfolio_df.columns:
         try:
-            # Filter Valid Tickers (No Cash)
-            tickers = [
-                t for t in portfolio_df['ticker'].unique() 
-                if isinstance(t, str) and "CASH" not in t.upper()
-            ]
+            # A. Separate Equity vs Cash
+            # We identify cash rows by the "Type" column OR the Ticker name
+            is_cash = portfolio_df['ticker'].str.contains("CASH", case=False, na=False)
+            if 'type' in portfolio_df.columns:
+                is_cash = is_cash | (portfolio_df['type'] == 'Cash')
             
-            # Get Cash Weight
-            # If you have rows like 'CASH_EUR', sum their weights
-            cash_weight = 0.0
-            if 'target_weight' in portfolio_df.columns:
-                cash_rows = portfolio_df[portfolio_df['ticker'].str.contains("CASH", na=False)]
-                cash_weight = pd.to_numeric(cash_rows['target_weight'], errors='coerce').sum()
-
+            equity_df = portfolio_df[~is_cash]
+            cash_df = portfolio_df[is_cash]
+            
+            # B. Calculate Cash Weight
+            # If weights aren't normalized, we sum market value
+            total_val = portfolio_df['market_value'].sum()
+            cash_val = cash_df['market_value'].sum()
+            cash_weight = cash_val / total_val if total_val > 0 else 0.0
+            
+            # C. Download Equity Data
+            tickers = equity_df['ticker'].unique().tolist()
+            
             if tickers:
-                # Download Equity Data
+                # Download all at once
                 data = yf.download(tickers, start=start, end=end, progress=False)['Close']
-                data = data.ffill().bfill() # Fill gaps (holidays)
+                data = data.ffill().bfill() # Fill gaps
+                data = data.reindex(dates, method='ffill') # Align dates
                 
-                # Reindex to match our main timeline
-                data = data.reindex(df_chart.index, method='ffill')
-                
-                # Calculate Individual Stock Indexes (Start = 100)
-                # This creates a "Growth" curve for every single stock in local currency
-                # (10% growth in USD is the same shape as 10% growth in EUR)
-                stock_indexes = (data / data.iloc[0]) * 100
-                
-                # Apply Weights
-                weighted_returns = pd.Series(0.0, index=df_chart.index)
+                # Calculate Weighted Return of Equities
+                equity_curve = pd.Series(0.0, index=dates)
                 
                 for t in tickers:
-                    if t in stock_indexes.columns:
-                        # Get weight from your Google Sheet
-                        w = portfolio_df.loc[portfolio_df['ticker'] == t, 'target_weight'].iloc[0]
-                        # Add weighted contribution to the index
-                        weighted_returns += stock_indexes[t] * float(w)
+                    if t in data.columns:
+                        # Get weight of this specific stock
+                        # (Market Value of Stock / Total Portfolio Value)
+                        stock_val = equity_df.loc[equity_df['ticker'] == t, 'market_value'].sum()
+                        weight = stock_val / total_val
+                        
+                        # Normalize stock to start at 1.0 (not 100 yet)
+                        stock_return = data[t] / data[t].iloc[0]
+                        
+                        # Add to curve
+                        equity_curve += stock_return * weight
                 
-                # Add Cash Contribution (Cash stays at 100, it doesn't grow/shrink in this view)
-                # If you have 20% cash, that portion of the portfolio stays flat
-                weighted_returns += (100.0 * cash_weight)
+                # D. Combine Equity Curve + Cash Drag
+                # Portfolio = (Equity_Curve) + (Cash_Weight * 1.0)
+                # Since Cash stays at 1.0 (flat) relative to itself
+                final_curve = equity_curve + cash_weight
                 
-                df_chart['TIC_Fund'] = weighted_returns
+                # Rebase entire portfolio to start at 100
+                df_chart['TIC_Fund'] = final_curve * 100
+                
             else:
+                # 100% Cash Portfolio
                 df_chart['TIC_Fund'] = 100.0
                 
         except Exception as e:
-            print(f"Bench Error: {e}")
+            print(f"Portfolio Gen Error: {e}")
             df_chart['TIC_Fund'] = 100.0
     else:
         df_chart['TIC_Fund'] = 100.0
 
-    # Clean up for plotting
-    df_chart = df_chart.dropna().reset_index().rename(columns={'index':'Date'})
-    return df_chart
+    return df_chart.dropna().reset_index().rename(columns={'index':'Date'})
     
 @st.cache_data(ttl=60)
 def load_data():
@@ -2283,6 +2287,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
