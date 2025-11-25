@@ -1971,134 +1971,98 @@ def render_fundamental_dashboard(user, portfolio, proposals):
 
 def render_quant_dashboard(user, portfolio, proposals):
     st.title(f"🤖 Quant Lab")
-    with st.expander("🎲 Monte Carlo Risk Engine", expanded=True):
-        c_param, c_plot = st.columns([1, 3])
+    # MONTE CARLO SIMULATION
+    st.markdown("### 🎲 Monte Carlo Risk Engine")
+    st.caption("Project future portfolio performance based on random walk simulations (Geometric Brownian Motion).")
+    
+    c_param, c_plot = st.columns([1, 3])
+    
+    with c_param:
+        st.write("**Settings**")
+        n_sims = st.slider("Simulations", 10, 100, 50)
+        horizon = st.slider("Horizon (Days)", 30, 365, 252)
+        mu = st.slider("Expected Return", -10, 30, 8) / 100
+        sigma = st.slider("Volatility", 5, 50, 15) / 100
         
-        with c_param:
-            st.write("**Simulation Settings**")
-            n_sims = st.slider("Simulations (N)", 10, 100, 50)
-            horizon = st.slider("Time Horizon (Days)", 30, 365, 252)
-            # Mean Annual Return
-            mu = st.slider("Expected Return (%)", -10, 30, 8) / 100
-            # Annual Volatility
-            sigma = st.slider("Volatility (%)", 5, 50, 15) / 100
+    with c_plot:
+        dt = 1/252
+        S0 = 100
+        dates = pd.date_range(start=datetime.now(), periods=horizon+1)
+        sim_data = {'Date': dates}
+        
+        for i in range(n_sims):
+            Z = np.random.normal(0, 1, horizon)
+            daily_returns = np.exp((mu - 0.5 * sigma**2) * dt + sigma * np.sqrt(dt) * Z)
+            daily_returns = np.insert(daily_returns, 0, 1.0)
+            sim_data[f'Sim_{i}'] = S0 * np.cumprod(daily_returns)
             
-            st.info("Uses Geometric Brownian Motion (GBM) to project future portfolio paths.")
+        df_mc = pd.DataFrame(sim_data).melt(id_vars='Date', var_name='Sim', value_name='Value')
+        
+        fig = px.line(df_mc, x='Date', y='Value', color='Sim', 
+                     color_discrete_sequence=px.colors.qualitative.Pastel)
+        fig.update_layout(showlegend=False, xaxis_title=None, yaxis_title="Value (Base 100)")
+        fig.update_traces(opacity=0.5, line=dict(width=1))
+        st.plotly_chart(fig, use_container_width=True)
 
-        with c_plot:
-            # Monte Carlo Logic
-            dt = 1/252  # Daily time step
-            S0 = 100    # Initial Index Value
-            
-            # Generate random paths
-            # Formula: S_t = S_{t-1} * exp((mu - 0.5*sigma^2)*dt + sigma*sqrt(dt)*Z)
-            possible_paths = []
-            
-            # Create a date range for the x-axis
-            dates = pd.date_range(start=datetime.today(), periods=horizon+1)
-            
-            # We create a dictionary to hold all paths for the dataframe
-            sim_data = {'Date': dates}
-            
-            for i in range(n_sims):
-                # Generate random shocks (Z scores)
-                Z = np.random.normal(0, 1, horizon)
-                
-                # Calculate daily returns
-                drift = (mu - 0.5 * sigma**2) * dt
-                diffusion = sigma * np.sqrt(dt) * Z
-                daily_returns = np.exp(drift + diffusion)
-                
-                # Prepend 1.0 for the start day
-                daily_returns = np.insert(daily_returns, 0, 1.0)
-                
-                # Calculate cumulative price path
-                price_path = S0 * np.cumprod(daily_returns)
-                sim_data[f'Sim_{i+1}'] = price_path
-
-            # Convert to DataFrame for Plotly
-            df_mc = pd.DataFrame(sim_data)
-            
-            # Melt for easy plotting with Plotly Express
-            df_melted = df_mc.melt(id_vars='Date', var_name='Simulation', value_name='Portfolio Value')
-
-            # Plot
-            fig = px.line(
-                df_melted, 
-                x='Date', 
-                y='Portfolio Value', 
-                color='Simulation',
-                title=f"Projected Future Value ({n_sims} Scenarios)",
-                color_discrete_sequence=px.colors.qualitative.Pastel # Soft colors
-            )
-            
-            # Style improvements: Hide legend (too messy with 50 lines), add transparency
-            fig.update_layout(showlegend=False, xaxis_title="Date", yaxis_title="Indexed Value (Start=100)")
-            fig.update_traces(opacity=0.6, line=dict(width=1)) # Make lines thinner and transparent
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Quick Stats
-            final_values = df_mc.iloc[-1, 1:] # Last row, excluding Date
-            median_val = np.median(final_values)
-            worst_case = np.percentile(final_values, 5) # 5th percentile (95% VaR)
-            
-            c_s1, c_s2, c_s3 = st.columns(3)
-            c_s1.metric("Median Outcome", f"{median_val:.0f}")
-            c_s2.metric("Worst Case (5%)", f"{worst_case:.0f}", delta=f"{worst_case-100:.0f}", delta_color="inverse")
-            c_s3.metric("Upside (95%)", f"{np.percentile(final_values, 95):.0f}")
+        # Stats
+        final_vals = df_mc[df_mc['Date'] == dates[-1]]['Value']
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Median", f"{final_vals.median():.0f}")
+        c2.metric("Worst Case (5%)", f"{np.percentile(final_vals, 5):.0f}")
+        c3.metric("Best Case (95%)", f"{np.percentile(final_vals, 95):.0f}")
 
     st.divider()
-    # 2. Live Portfolio View
+    
+    # --- 2. STRATEGY OVERVIEW ---
     c1, c2 = st.columns([2, 1])
     
     with c1:
-        st.subheader("Holdings by Model")
-        
+        st.subheader("Strategy Allocation")
         if not portfolio.empty:
-            # Check if 'Model' column exists (Case insensitive)
             model_col = 'model' if 'model' in portfolio.columns else None
-            
             if model_col:
-                # GROUP BY MODEL
-                # We aggregate Market Value and calculate the new weights
                 grouped = portfolio.groupby(model_col)[['market_value']].sum().reset_index()
                 total_aum = grouped['market_value'].sum()
                 grouped['allocation'] = grouped['market_value'] / total_aum
                 
-                # Display the Grouped Table
                 st.dataframe(
                     grouped,
                     use_container_width=True,
                     hide_index=True,
                     column_config={
-                        model_col: st.column_config.TextColumn("Strategy / Model"),
-                        "market_value": st.column_config.NumberColumn("Total Value", format="€%.2f"),
-                        "allocation": st.column_config.ProgressColumn("Allocation", format="%.2f%%", min_value=0, max_value=1)
+                        model_col: st.column_config.TextColumn("Strategy"),
+                        "market_value": st.column_config.NumberColumn("Value", format="€%.2f"),
+                        "allocation": st.column_config.ProgressColumn("Alloc", format="%.2f%%", min_value=0, max_value=1)
                     }
                 )
             else:
-                st.warning("⚠️ 'Model' column missing in Quant Sheet. showing raw holdings.")
-                st.dataframe(portfolio, use_container_width=True)
-                
+                st.info("No 'Model' column found.")
+
     with c2:
-        st.subheader("Strategy Allocation")
         if not portfolio.empty:
-            # If 'Model' exists, graph by Model. Else graph by Sector.
             group_col = 'model' if 'model' in portfolio.columns else 'sector'
-            
             if group_col in portfolio.columns:
-                # Plotly automatically handles the aggregation for the pie chart
-                fig = px.pie(
-                    portfolio, 
-                    values='market_value', 
-                    names=group_col, 
-                    hole=0.4,
-                    color_discrete_sequence=px.colors.qualitative.Bold
-                )
-                fig.update_traces(textposition='inside', textinfo='percent+label')
+                fig = px.pie(portfolio, values='market_value', names=group_col, hole=0.4)
                 st.plotly_chart(fig, use_container_width=True)
 
+    # --- 3. DETAILED HOLDINGS ---
+    st.divider()
+    st.subheader("📜 Detailed Asset Holdings")
+    
+    if not portfolio.empty:
+        display_cols = ['ticker', 'name', 'sector', 'model', 'units', 'market_value']
+        valid_cols = [c for c in display_cols if c in portfolio.columns]
+        
+        st.dataframe(
+            portfolio[valid_cols],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "market_value": st.column_config.NumberColumn("Value", format="€%.2f"),
+                "ticker": st.column_config.TextColumn("Asset"),
+            }
+        )
+        
 def render_inbox(user, messages, all_members_df):
     # --- 1. FILTER MESSAGES FOR CURRENT USER ---
     my_msgs = [
@@ -2443,6 +2407,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
