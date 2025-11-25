@@ -357,6 +357,35 @@ def fetch_real_benchmark_data(portfolio_df):
     
 @st.cache_data(ttl=60)
 def load_data():
+    # --- 1. LOAD PORTFOLIOS & CALCULATE ASSETS FIRST ---
+    # We need the money totals BEFORE we process members
+    f_port = get_data_from_sheet("Fundamentals")
+    q_port = get_data_from_sheet("Quant")
+    
+    # Calculate Total Assets (Cash + Equities)
+    f_total = 0.0
+    if not f_port.empty: 
+        f_port.columns = f_port.columns.astype(str).str.lower()
+        # Clean numbers
+        if 'target_weight' in f_port.columns:
+            f_port['target_weight'] = pd.to_numeric(f_port['target_weight'], errors='coerce').fillna(0)
+        if 'total' in f_port.columns:
+            val = f_port['total'].iloc[0]
+            # Clean the string if needed
+            try: f_total = float(str(val).replace('€','').replace(',','').replace(' ',''))
+            except: f_total = 0.0
+
+    q_total = 0.0
+    if not q_port.empty:
+        q_port.columns = q_port.columns.astype(str).str.lower()
+        if 'ticker' in q_port.columns: q_port = q_port.rename(columns={'ticker': 'model_id'})
+        if 'target_weight' in q_port.columns: q_port = q_port.rename(columns={'target_weight': 'allocation'})
+        if 'total' in q_port.columns:
+            val = q_port['total'].iloc[0]
+            try: q_total = float(str(val).replace('€','').replace(',','').replace(' ',''))
+            except: q_total = 0.0
+
+    # --- 2. LOAD MEMBERS & CALCULATE NAV ---
     ROLE_MAP = {
         'ab': {'r': 'Advisory Board', 'd': 'Advisory', 's': 'Board', 'admin': False},
         'qr': {'r': 'Quant Researcher', 'd': 'Quant', 's': 'Quant Research', 'admin': False},
@@ -371,28 +400,54 @@ def load_data():
         'other': {'r': 'Member', 'd': 'General', 's': 'General', 'admin': False},
     }
 
-    # Helper to clean numbers
-    def clean_float(val):
-        if pd.isna(val) or val == '': return 0.0
-        if isinstance(val, (int, float)): return float(val)
-        try: return float(str(val).replace('€', '').replace(',', '').replace(' ', ''))
-        except: return 0.0
-
-    members_list = []
-    
-    # 1. LOAD MEMBERS
     df_mem = get_data_from_sheet("Members")
+    
+    # A. Calculate Total Units Outstanding (The Denominator)
+    total_units_fund = 0.0
+    total_units_quant = 0.0
+    
+    if not df_mem.empty:
+        # Ensure columns exist
+        if 'Units_Fund' not in df_mem.columns: df_mem['Units_Fund'] = 0.0
+        if 'Units_Quant' not in df_mem.columns: df_mem['Units_Quant'] = 0.0
+        
+        # Sum them up
+        total_units_fund = pd.to_numeric(df_mem['Units_Fund'], errors='coerce').sum()
+        total_units_quant = pd.to_numeric(df_mem['Units_Quant'], errors='coerce').sum()
+
+    # B. Calculate NAV (Price per Unit)
+    # If no units exist, price defaults to 100.00
+    nav_fund = f_total / total_units_fund if total_units_fund > 0 else 100.00
+    nav_quant = q_total / total_units_quant if total_units_quant > 0 else 100.00
+
+    # C. Build Member List with Real Values
+    members_list = []
     if not df_mem.empty:
         for _, row in df_mem.iterrows():
+            # ... (Role parsing logic same as before) ...
             role_code = str(row.get('Role', 'other')).strip().lower()
             role_data = ROLE_MAP.get(role_code, {'r': 'Member', 'd': 'General', 's': 'General', 'admin': False})
             name = str(row.get('Name', 'Unknown')).strip()
             uname = name.lower().replace(" ", ".")
             email = str(row.get('Email', f"{uname}@tilburg.edu")).strip()
             
-            try: raw_liq = row.get('Liq Pending', 0); liq_val = int(float(raw_liq)) if raw_liq != '' else 0
+            try: liq_val = int(row.get('Liq Pending', 0))
             except: liq_val = 0
             
+            # GET INDIVIDUAL UNITS
+            try: u_f = float(row.get('Units_Fund', 0))
+            except: u_f = 0.0
+            try: u_q = float(row.get('Units_Quant', 0))
+            except: u_q = 0.0
+            
+            # CALCULATE REAL VALUE
+            # (Units_F * Price_F) + (Units_Q * Price_Q)
+            real_value = (u_f * nav_fund) + (u_q * nav_quant)
+            
+            # Initial Investment (Static from sheet)
+            try: init_inv = float(row.get('Initial Investment', 0))
+            except: init_inv = 0.0
+
             members_list.append({
                 'u': uname,
                 'p': str(row.get('Password', 'pass')).strip(),
@@ -404,34 +459,18 @@ def load_data():
                 'admin': role_data.get('admin', False),
                 'status': 'Pending' if liq_val == 1 else 'Active',
                 'liq_pending': liq_val,
-                'contribution': clean_float(row.get('Initial Investment', 0)),
-                'value': clean_float(row.get('Current value', 0)),
+                'contribution': init_inv,
+                'value': real_value, # <--- DYNAMICALLY CALCULATED
+                'units_fund': u_f,   # Store for display
+                'units_quant': u_q,  # Store for display
                 'contract_text': "TIC MEMBERSHIP..."
             })
     else:
-        members_list = [{'u': 'admin', 'p': 'pass', 'n': 'Offline Admin', 'r': 'Admin', 'd': 'Board', 'admin': True, 'liq_pending': 0, 'contribution':0, 'value':0}]
-    
+        # Fallback
+        members_list = [{'u': 'admin', 'p': 'pass', 'n': 'Offline', 'r': 'Admin', 'd': 'Board', 'admin': True, 'value': 0}]
+
     members = pd.DataFrame(members_list)
-
-    # 2. LOAD PORTFOLIOS & TOTALS
-    f_port = get_data_from_sheet("Fundamentals")
-    q_port = get_data_from_sheet("Quant")
     
-    f_total = 0.0
-    if not f_port.empty: 
-        f_port.columns = f_port.columns.astype(str).str.lower()
-        if 'target_weight' in f_port.columns: f_port['target_weight'] = f_port['target_weight'].apply(clean_float)
-        if 'total' in f_port.columns: f_total = clean_float(f_port['total'].iloc[0])
-
-    q_total = 0.0
-    if not q_port.empty:
-        q_port.columns = q_port.columns.astype(str).str.lower()
-        if 'ticker' in q_port.columns: q_port = q_port.rename(columns={'ticker': 'model_id'})
-        if 'target_weight' in q_port.columns: q_port = q_port.rename(columns={'target_weight': 'allocation'})
-        if 'allocation' in q_port.columns: q_port['allocation'] = q_port['allocation'].apply(clean_float)
-        if 'total' in q_port.columns: q_total = clean_float(q_port['total'].iloc[0])
-        if 'ytd_return' not in q_port.columns: q_port['ytd_return'] = 0.0
-
     # 3. MESSAGES
     msgs = get_data_from_sheet("Messages")
     if not msgs.empty: msgs.columns = msgs.columns.str.lower()
@@ -993,7 +1032,7 @@ def render_upcoming_events_sidebar(all_events):
         </div>
         """, unsafe_allow_html=True)
 
-def render_admin_panel(user, members_df, f_port, q_port, total_aum, proposals, votes_df):
+def render_admin_panel(user, members_df, f_port, q_port, total_aum, proposals, votes_df, nav_f, nav_q):
     st.title("🔒 Admin Console")
     st.info(f"Logged in as: {user['n']} ({user['r']})")
     
@@ -1031,6 +1070,56 @@ def render_admin_panel(user, members_df, f_port, q_port, total_aum, proposals, v
 
     # --- TAB 2: TREASURY & LIQUIDATION ---
     with tab2:
+        with st.expander("💰 Process Capital Injection (Treasurer)"):
+            c_nav1, c_nav2 = st.columns(2)
+            c_nav1.metric("NAV Fundamental", f"€{nav_f:.2f}")
+            c_nav2.metric("NAV Quant", f"€{nav_q:.2f}")
+            
+            with st.form("issue_units"):
+                target_user = st.selectbox("Member", members_df['u'].tolist())
+                amount = st.number_input("Cash Injected (€)", min_value=0.0)
+                
+                # Treasurer chooses where the money goes
+                fund_choice = st.radio("Allocate to:", ["Fundamental", "Quant", "50/50 Split"])
+                
+                if st.form_submit_button("Issue Units"):
+                    client = init_connection()
+                    sheet = client.open("TIC_Database_Master")
+                    ws = sheet.worksheet("Members")
+                    
+                    # Find user row
+                    data = ws.get_all_records()
+                    df = pd.DataFrame(data)
+                    df['u'] = df['Name'].astype(str).str.lower().str.strip().str.replace(' ', '.')
+                    idx = df.index[df['u'] == target_user].tolist()[0]
+                    row_num = idx + 2
+                    
+                    # Calculate Units
+                    u_f_add = 0.0
+                    u_q_add = 0.0
+                    
+                    if fund_choice == "Fundamental":
+                        u_f_add = amount / nav_f
+                    elif fund_choice == "Quant":
+                        u_q_add = amount / nav_q
+                    else: # 50/50
+                        u_f_add = (amount * 0.5) / nav_f
+                        u_q_add = (amount * 0.5) / nav_q
+                    
+                    # Update Cells
+                    curr_f = float(df.iloc[idx]['Units_Fund']) if 'Units_Fund' in df.columns else 0.0
+                    curr_q = float(df.iloc[idx]['Units_Quant']) if 'Units_Quant' in df.columns else 0.0
+                    curr_inv = float(df.iloc[idx]['Initial Investment'])
+                    
+                    # We find column indices dynamically
+                    headers = ws.row_values(1)
+                    
+                    ws.update_cell(row_num, headers.index('Units_Fund')+1, curr_f + u_f_add)
+                    ws.update_cell(row_num, headers.index('Units_Quant')+1, curr_q + u_q_add)
+                    ws.update_cell(row_num, headers.index('Initial Investment')+1, curr_inv + amount)
+                    
+                    st.success(f"Issued: {u_f_add:.2f} Fund Units and {u_q_add:.2f} Quant Units.")
+                    st.cache_data.clear()
         st.subheader("Club Financials")
         c1, c2, c3 = st.columns(3)
         c1.metric("Cash Balance", "€12,450.00", "+€500")
@@ -1805,7 +1894,7 @@ def main():
     if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
     
     # Unpack everything
-    members, f_port, q_port, msgs, props, calendar_events, f_total, q_total, df_votes = load_data()
+    members, f_port, q_port, msgs, props, calendar_events, f_total, q_total, df_votes, nav_f, nav_q = load_data()
 
     if not st.session_state['logged_in']:
         c1, c2, c3 = st.columns([1,1.5,1])
@@ -1853,18 +1942,27 @@ def main():
 
     with st.sidebar:
         st.image(TIC_LOGO, width=150)
-        st.markdown("---")
-        st.header(user['n'])
-        st.caption(f"{user['r']} | {user['email']}")
         
-        # FINANCIAL SUMMARY IN SIDEBAR
+        # --- UPDATED FINANCIAL SUMMARY ---
         val = user.get('value', 0)
-        cont = user.get('contribution', 1) # avoid div/0 error
-        growth_pct = ((val - cont) / cont) * 100 if cont > 0 else 0.0
+        cont = user.get('contribution', 1)
+        growth = ((val - cont)/cont)*100 if cont > 0 else 0.0
         
-        st.metric("My Stake", f"€{val:,.0f}", f"{growth_pct:.1f}%")
+        st.metric("My Stake", f"€{val:,.0f}", f"{growth:.1f}%")
         
-        menu = ["Simulation", "Inbox", "Library", "Settings", "Calendar"] 
+        # Show breakdown if they hold both
+        u_f = user.get('units_fund', 0)
+        u_q = user.get('units_quant', 0)
+        
+        if u_f > 0 and u_q > 0:
+            st.caption(f"Fund: €{(u_f*nav_f):,.0f} | Quant: €{(u_q*nav_q):,.0f}")
+        
+        st.divider()
+        st.caption(f"NAV Fund: €{nav_f:.2f}")
+        st.caption(f"NAV Quant: €{nav_q:.2f}")
+        # ---------------------------------
+        
+        menu = ["Simulation", "Inbox", "Library", "Calendar", "Settings"] 
 
         # Board AND Advisory Board AND Dept Heads see Dashboards
         if user['d'] in ['Fundamental', 'Quant', 'Board', 'Advisory']:
@@ -1941,7 +2039,7 @@ def main():
     elif nav == "Inbox": render_inbox(user, msgs, members)
     elif nav == "Library": render_documents(user)
     elif nav == "Settings": render_offboarding(user)
-    elif nav == "Admin Panel": render_admin_panel(user, members, f_port, q_port, f_total + q_total, props, df_votes)
+    elif nav == "Admin Panel": render_admin_panel(user, members, f_port, q_port, f_total + q_total, props, df_votes, nav_f, nav_q)
 
     # PROFESSIONAL FOOTER
     st.markdown("---")
@@ -1953,6 +2051,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
