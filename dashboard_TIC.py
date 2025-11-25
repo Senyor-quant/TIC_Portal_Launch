@@ -1841,8 +1841,12 @@ def render_ticker_tape(data_dict):
     )
 
 def render_offboarding(user):
+    if user['r'] == 'Guest':
+        st.title("⚙️ Settings (Guest)")
+        st.warning("🔒 Security features are disabled for guest accounts.")
+        st.info("You cannot change passwords or request capital in this demo mode.")
+        return
     st.title("⚙️ Settings & Financials")
-    
     t_invest, t_status, t_sec = st.tabs(["🟢 Capital Injection", "🔴 Exit / Liquidation", "🔐 Security"])
     
     # 1. Get User Financials
@@ -2577,7 +2581,7 @@ def main():
                         'u': 'guest',
                         'n': 'Guest Visitor',
                         'r': 'Guest',       # Role = Guest
-                        'd': 'General',     # Department
+                        'd': 'Board',     # Department
                         's': 'General',
                         'email': 'guest@tilburg.edu',
                         'admin': False,
@@ -2688,22 +2692,24 @@ def main():
         st.markdown("---")
 
 # ROUTING
-    if nav == "Dashboard":
-        # 1. BOARD & ADVISORY (See Both)
-        if user['d'] in ['Board', 'Advisory']:
-            st.title("🏛️ Executive Overview")
+    if "Dashboard" in nav:
+        # 1. BOARD, ADVISORY, AND GUESTS (See Both)
+        if user['d'] in ['Board', 'Advisory'] or user['r'] == 'Guest':
+            st.title("🏛️ Executive Overview (Guest View)" if user['r'] == 'Guest' else "🏛️ Executive Overview")
+            
+            if user['r'] == 'Guest':
+                st.info("👀 You are viewing the live portfolio in Read-Only mode.")
+            
             t_fund, t_quant = st.tabs(["📈 Fundamental", "🤖 Quant"])
             
             with t_fund: 
                 render_fundamental_dashboard(user, f_port, props)
                 st.divider()
-                # FIX: Department matches the Tab (Fundamental)
                 render_voting_section(user, props, df_votes, "Fundamental")
                 
             with t_quant: 
                 render_quant_dashboard(user, q_port, props)
                 st.divider()
-                # FIX: Department matches the Tab (Quant)
                 render_voting_section(user, props, df_votes, "Quant")
 
         # 2. QUANT TEAM (See Quant Only)
@@ -2725,7 +2731,22 @@ def main():
         with t_sim: render_simulation(user)
         with t_lead: render_leaderboard(user, members) 
     elif nav == "Calendar": render_calendar_view(user, calendar_events)
-    elif "Inbox" in nav: render_inbox(user, msgs, members)
+    elif "Inbox" in nav: 
+        # GUEST OVERRIDE
+        if user['r'] == 'Guest':
+            # Create a fake message list just for this session
+            guest_msgs = [{
+                'id': 9999,
+                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M"),
+                'from_user': 'System',
+                'to_user': 'guest',
+                'subject': 'Welcome to TIC Portal!',
+                'body': 'Welcome to the Tilburg Investment Club portal.\n\nFeel free to explore our dashboards, risk models, and library.\n\nNote: As a guest, you have read-only access. Voting and trading features are disabled.',
+                'read': 'guest' # Already read
+            }]
+            render_inbox(user, guest_msgs, members)
+        else:
+            render_inbox(user, msgs, members)
     elif nav == "Library": render_documents(user)
     elif nav == "Settings": render_offboarding(user)
     elif nav == "Admin Panel": render_admin_panel(user, members, f_port, q_port, f_total, q_total, props, df_votes, nav_f, nav_q, att_df)
@@ -2752,6 +2773,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
