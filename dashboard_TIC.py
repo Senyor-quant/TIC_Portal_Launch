@@ -217,7 +217,10 @@ def fetch_live_prices_with_change(tickers):
     if not tickers: return {}
     
     # Clean tickers
-    clean_tickers = list(set([str(t) for t in tickers if isinstance(t, str)]))
+    clean_tickers = list(set([
+        str(t) for t in tickers 
+        if isinstance(t, str) and t and "CASH" not in t.upper()
+    ]))
     
     try:
         # Fetch 1 day of data with 1-hour intervals to get the "Last Hour" change
@@ -300,7 +303,10 @@ def fetch_real_benchmark_data(portfolio_df):
         try:
             tickers = portfolio_df['ticker'].dropna().unique().tolist()
             # Clean tickers (remove non-strings)
-            tickers = [t for t in tickers if isinstance(t, str)]
+            tickers = [
+                t for t in portfolio_df['ticker'].unique() 
+                if isinstance(t, str) and "CASH" not in t.upper()
+            ]
             
             if tickers:
                 # Download all stocks at once
@@ -1695,4 +1701,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
