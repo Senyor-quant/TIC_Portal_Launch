@@ -1978,10 +1978,10 @@ def main():
         if u_f > 0 and u_q > 0:
             st.caption(f"Fund: €{(u_f*nav_f):,.0f} | Quant: €{(u_q*nav_q):,.0f}")
         
-        st.divider()
+      
         st.caption(f"NAV Fund: €{nav_f:.2f}")
         st.caption(f"NAV Quant: €{nav_q:.2f}")
-        # ---------------------------------
+          st.divider()
         
         menu = ["Simulation", "Inbox", "Library", "Calendar", "Settings"] 
 
@@ -2072,6 +2072,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
