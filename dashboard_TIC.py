@@ -554,13 +554,11 @@ def load_data():
     # --- 7. ATTENDANCE ---
     att = get_data_from_sheet("Attendance")
     if not att.empty:
-        # Standardize date format for easier filtering
         if 'Date' in att.columns:
             att['Date'] = pd.to_datetime(att['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
     else:
-        # Fallback structure if empty
         att = pd.DataFrame(columns=['Date', 'Member', 'Status', 'Reason'])
-        
+
     return members, f_port, q_port, messages, proposals, full_calendar, f_total, q_total, df_votes, nav_f, nav_q, att
     
 # ==========================================
@@ -2471,6 +2469,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
