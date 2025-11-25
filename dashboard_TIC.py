@@ -550,12 +550,56 @@ def load_data():
     df_votes = get_data_from_sheet("Votes")
     if not df_votes.empty:
         df_votes['Proposal_ID'] = df_votes['Proposal_ID'].astype(str)
-
-    return members, f_port, q_port, messages, proposals, full_calendar, f_total, q_total, df_votes, nav_fund, nav_quant
+        
+    # --- 7. ATTENDANCE ---
+    att = get_data_from_sheet("Attendance")
+    if not att.empty:
+        # Standardize date format for easier filtering
+        att['Date'] = pd.to_datetime(att['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
+    else:
+        # Fallback structure if empty
+        att = pd.DataFrame(columns=['Date', 'Member', 'Status', 'Reason'])
+        
+    return members, f_port, q_port, messages, proposals, full_calendar, f_total, q_total, df_votes, nav_f, nav_q, att
     
 # ==========================================
 # 3. HELPER FUNCTIONS
 # ==========================================
+def save_attendance_log(date_str, attendance_data):
+    """
+    Saves attendance for a list of members to Google Sheets.
+    attendance_data: dict { 'username': 'Present'/'Absent' }
+    """
+    client = init_connection()
+    if not client: return False
+    
+    try:
+        sheet = client.open("TIC_Database_Master")
+        ws = sheet.worksheet("Attendance")
+        
+        # 1. Check if data for this date already exists (Prevent Duplicates)
+        existing_records = ws.get_all_records()
+        existing_dates = [str(r['Date']) for r in existing_records]
+        
+        if date_str in existing_dates:
+            # Option: Overwrite logic is complex. Simple logic: Warn user.
+            # Ideally, you delete old rows for this date and append new ones.
+            # For MVP: Just append (simpler)
+            pass 
+
+        # 2. Prepare Rows
+        new_rows = []
+        for user, status in attendance_data.items():
+            new_rows.append([date_str, user, status, ""])
+            
+        # 3. Append
+        ws.append_rows(new_rows)
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Attendance save failed: {e}")
+        return False
+        
 def mark_message_read_gsheet(message_id, username):
     """Appends username to the 'Read' column for a specific message."""
     client = init_connection()
@@ -1239,7 +1283,7 @@ def render_upcoming_events_sidebar(all_events):
         </div>
         """, unsafe_allow_html=True)
 
-def render_admin_panel(user, members_df, f_port, q_port, f_total, q_total, proposals, votes_df, nav_f, nav_q):
+def render_admin_panel(user, members_df, f_port, q_port, f_total, q_total, proposals, votes_df, nav_f, nav_q, attendance_df):
     st.title("🔒 Admin Console")
     st.info(f"Logged in as: {user['n']} ({user['r']})")
     # 1. TABS
@@ -1441,29 +1485,49 @@ def render_admin_panel(user, members_df, f_port, q_port, f_total, q_total, propo
     # --- TAB 4: ATTENDANCE ---
     elif active_tab == "✅ Attendance":
         st.subheader("Meeting Attendance Tracker")
-        dates = ['2023-10-01', '2023-10-15', '2023-11-01', '2023-11-15']
-        num_members = len(members_df)
         
-        if 'attendance_df' not in st.session_state:
-            att_data = {
-                'Member': members_df['n'].tolist(),
-            }
-            for d in dates:
-                att_data[d] = np.random.choice([True, False], size=num_members, p=[0.8, 0.2])
-            st.session_state['attendance_df'] = pd.DataFrame(att_data)
+        # 1. Select Meeting Date
+        meet_date = st.date_input("Meeting Date", datetime.now())
+        date_str = meet_date.strftime('%Y-%m-%d')
+        
+        # 2. Interactive Table
+        # We create a temporary dataframe for the UI
+        input_df = pd.DataFrame({
+            'Member': members_df['n'],
+            'Username': members_df['u'], # Hidden ID
+            'Present': True # Default to Present
+        })
         
         edited_att = st.data_editor(
-            st.session_state['attendance_df'],
-            use_container_width=True,
-            column_config={d: st.column_config.CheckboxColumn(d) for d in dates},
-            hide_index=True
+            input_df,
+            column_config={
+                "Username": None, # Hide this column
+                "Present": st.column_config.CheckboxColumn("Present?", default=True)
+            },
+            hide_index=True,
+            use_container_width=True
         )
         
-        if st.button("Save Attendance Log"):
-            st.session_state['attendance_df'] = edited_att
-            st.success("Attendance records updated.")
-        st.metric("Average Attendance Rate", "85%")
-        pass
+        # 3. Save Button
+        if st.button("💾 Save Attendance Log"):
+            # Convert the editor data into the format needed for the helper
+            att_dict = {}
+            for index, row in edited_att.iterrows():
+                status = "Present" if row['Present'] else "Absent"
+                att_dict[row['Username']] = status
+            
+            if save_attendance_log(date_str, att_dict):
+                st.success(f"Attendance for {date_str} saved successfully.")
+            else:
+                st.error("Failed to save attendance.")
+        
+        st.divider()
+        
+        # 4. View History
+        st.markdown("#### 📜 History Log")
+        # Placeholder until you update the function signature
+        st.dataframe(attendance_df, use_container_width=True)
+    
     # --- TAB 5: GOVERNANCE ---
     elif active_tab == "🗳️ Governance":
         st.subheader("Proposal Archive & Live Results")
@@ -2222,7 +2286,7 @@ def main():
     if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
     
     # Unpack everything
-    members, f_port, q_port, msgs, props, calendar_events, f_total, q_total, df_votes, nav_f, nav_q = load_data()
+    members, f_port, q_port, msgs, props, calendar_events, f_total, q_total, df_votes, nav_f, nav_q, att_df = load_data()
 
     if not st.session_state['logged_in']:
         c1, c2, c3 = st.columns([1,1.5,1])
@@ -2394,7 +2458,7 @@ def main():
     elif "Inbox" in nav: render_inbox(user, msgs, members)
     elif nav == "Library": render_documents(user)
     elif nav == "Settings": render_offboarding(user)
-    elif nav == "Admin Panel": render_admin_panel(user, members, f_port, q_port, f_total, q_total, props, df_votes, nav_f, nav_q)
+    elif nav == "Admin Panel": render_admin_panel(user, members, f_port, q_port, f_total, q_total, props, df_votes, nav_f, nav_q, att_df)
 
     # PROFESSIONAL FOOTER
     st.markdown("---")
@@ -2406,6 +2470,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
