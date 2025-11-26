@@ -591,7 +591,62 @@ def load_data():
 # ==========================================
 # 3. HELPER FUNCTIONS
 # ==========================================
+@st.cache_data(ttl=3600) # Cache for 1 hour
+def fetch_stock_profile(ticker):
+    """Fetches the heavy 'info' dictionary with caching."""
+    try:
+        return yf.Ticker(ticker).info
+    except Exception:
+        return {}
 
+@st.cache_data(ttl=3600)
+def fetch_stock_financials(ticker):
+    """Fetches dataframes for statements."""
+    try:
+        stock = yf.Ticker(ticker)
+        # Force fetch to ensure we catch errors here
+        return stock.financials, stock.balance_sheet, stock.cashflow
+    except Exception:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+@st.cache_data(ttl=3600*12) # Cache for 12 hours
+def fetch_peer_data_safe(main_ticker, sector):
+    """Fetches peer stats with a delay to be polite to the API."""
+    
+    # 1. Define Peers based on Sector
+    peers = []
+    sec = str(sector)
+    if "Technology" in sec: peers = ['MSFT', 'AAPL', 'NVDA', 'AMD', 'INTC']
+    elif "Financial" in sec: peers = ['JPM', 'BAC', 'GS', 'MS', 'C']
+    elif "Energy" in sec: peers = ['XOM', 'CVX', 'SHEL', 'BP']
+    elif "Healthcare" in sec: peers = ['LLY', 'JNJ', 'PFE', 'MRK']
+    else: peers = ['SPY', 'QQQ'] 
+    
+    if main_ticker not in peers: peers.insert(0, main_ticker)
+    
+    peer_data = []
+    
+    # 2. Loop with Delay
+    for p in peers:
+        try:
+            # Sleep 0.3s between requests to avoid 429 Error
+            time.sleep(0.3) 
+            i = yf.Ticker(p).info
+            
+            peer_data.append({
+                "Ticker": p,
+                "Price": i.get('currentPrice'),
+                "P/E": i.get('trailingPE'),
+                "Fwd P/E": i.get('forwardPE'),
+                "EV/EBITDA": i.get('enterpriseToEbitda'),
+                "P/B": i.get('priceToBook'),
+                "Margins": i.get('profitMargins')
+            })
+        except: 
+            continue
+            
+    return pd.DataFrame(peer_data)
+    
 def add_calendar_event_gsheet(title, ticker, date_obj, type_str, audience):
     """Writes a new calendar event row to the Google Sheet 'Events' tab."""
     client = init_connection()
@@ -1162,113 +1217,94 @@ def render_stock_research():
     
     if not ticker: return
 
-    try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
+    # --- 1. FETCH MAIN DATA (CACHED) ---
+    info = fetch_stock_profile(ticker)
+    
+    if not info:
+        st.error(f"Could not load data for {ticker}. Ticker might be invalid or API is busy.")
+        return
+
+    # Header Data
+    st.markdown(f"""
+    ### {info.get('shortName', ticker)} ({ticker})
+    **Sector:** {info.get('sector', 'N/A')} | **Industry:** {info.get('industry', 'N/A')}  
+    **Price:** {info.get('currentPrice', 'N/A')} | **Market Cap:** {info.get('marketCap', 0)/1e9:.2f}B | **Beta:** {info.get('beta', 'N/A')}
+    """)
+    
+    t_des, t_fa, t_rv = st.tabs(["📄 DES (Profile)", "📊 FA (Financials)", "⚖️ RV (Peers)"])
+
+    # --- TAB 1: DESCRIPTION ---
+    with t_des:
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            st.subheader("Business Summary")
+            st.write(info.get('longBusinessSummary', 'No description available.'))
+        with c2:
+            st.subheader("Key Ratios")
+            ratios = {
+                "P/E (Trailing)": info.get('trailingPE'),
+                "P/E (Forward)": info.get('forwardPE'),
+                "PEG Ratio": info.get('pegRatio'),
+                "Price/Book": info.get('priceToBook'),
+                "EV/EBITDA": info.get('enterpriseToEbitda'),
+                "Profit Margin": f"{info.get('profitMargins', 0)*100:.2f}%",
+                "ROA": f"{info.get('returnOnAssets', 0)*100:.2f}%",
+                "ROE": f"{info.get('returnOnEquity', 0)*100:.2f}%"
+            }
+            df_r = pd.DataFrame(list(ratios.items()), columns=['Metric', 'Value'])
+            st.dataframe(df_r, hide_index=True, use_container_width=True)
+
+    # --- TAB 2: FINANCIAL ANALYSIS ---
+    with t_fa:
+        st.subheader("Financial Statements (Annual)")
         
-        # Header Data
-        st.markdown(f"""
-        ### {info.get('shortName', ticker)} ({ticker})
-        **Sector:** {info.get('sector', 'N/A')} | **Industry:** {info.get('industry', 'N/A')}  
-        **Price:** {info.get('currentPrice', 'N/A')} | **Market Cap:** {info.get('marketCap', 0)/1e9:.2f}B | **Beta:** {info.get('beta', 'N/A')}
-        """)
+        # Use Cached Helper
+        inc, bal, cash = fetch_stock_financials(ticker)
+
+        # Transpose for readability (Years as rows)
+        if not inc.empty:
+            st.markdown("**Income Statement**")
+            st.dataframe(inc.T.iloc[:, :8], use_container_width=True) # Show top 8 rows
         
-        t_des, t_fa, t_rv = st.tabs(["📄 DES (Profile)", "📊 FA (Financials)", "⚖️ RV (Peers)"])
+        if not bal.empty:
+            st.markdown("**Balance Sheet**")
+            st.dataframe(bal.T.iloc[:, :8], use_container_width=True)
+            
+        if not cash.empty:
+            st.markdown("**Cash Flow**")
+            st.dataframe(cash.T.iloc[:, :8], use_container_width=True)
 
-        # --- TAB 1: DESCRIPTION ---
-        with t_des:
-            c1, c2 = st.columns([2, 1])
-            with c1:
-                st.subheader("Business Summary")
-                st.write(info.get('longBusinessSummary', 'No description available.'))
-            with c2:
-                st.subheader("Key Ratios")
-                ratios = {
-                    "P/E (Trailing)": info.get('trailingPE'),
-                    "P/E (Forward)": info.get('forwardPE'),
-                    "PEG Ratio": info.get('pegRatio'),
-                    "Price/Book": info.get('priceToBook'),
-                    "EV/EBITDA": info.get('enterpriseToEbitda'),
-                    "Profit Margin": f"{info.get('profitMargins', 0)*100:.2f}%",
-                    "ROA": f"{info.get('returnOnAssets', 0)*100:.2f}%",
-                    "ROE": f"{info.get('returnOnEquity', 0)*100:.2f}%"
-                }
-                df_r = pd.DataFrame(list(ratios.items()), columns=['Metric', 'Value'])
-                st.dataframe(df_r, hide_index=True, use_container_width=True)
-
-        # --- TAB 2: FINANCIAL ANALYSIS ---
-        with t_fa:
-            st.subheader("Financial Statements (Annual)")
+    # --- TAB 3: RELATIVE VALUATION ---
+    with t_rv:
+        st.subheader("Peer Comparison")
+        st.caption("Comparing against major peers in the same sector (Cached & Throttled).")
+        
+        # Use Cached Helper
+        df_peers = fetch_peer_data_safe(ticker, info.get('sector', ''))
+        
+        if not df_peers.empty:
+            df_peers = df_peers.set_index("Ticker")
             
-            # Fetch financials
-            inc = stock.financials
-            bal = stock.balance_sheet
-            cash = stock.cashflow
-
-            # Transpose for readability (Years as rows)
-            if not inc.empty:
-                st.markdown("**Income Statement**")
-                st.dataframe(inc.T.iloc[:, :8], use_container_width=True) # Show top 8 rows
-            
-            if not bal.empty:
-                st.markdown("**Balance Sheet**")
-                st.dataframe(bal.T.iloc[:, :8], use_container_width=True)
-
-        # --- TAB 3: RELATIVE VALUATION ---
-        with t_rv:
-            st.subheader("Peer Comparison")
-            st.caption("Comparing against major peers in the same sector (Automated Fetch).")
-            
-            # 1. Define Peers (Simple logic or hardcoded for demo)
-            # In a full app, you'd scrape a peer list. Here we use a static list based on sector or manual input.
-            sector = info.get('sector', '')
-            peers = []
-            if "Technology" in sector: peers = ['MSFT', 'AAPL', 'NVDA', 'AMD', 'INTC']
-            elif "Financial" in sector: peers = ['JPM', 'BAC', 'GS', 'MS', 'C']
-            else: peers = [ticker, 'SPY'] # Fallback
-            
-            if ticker not in peers: peers.insert(0, ticker)
-
-            # 2. Bulk Fetch
-            peer_data = []
-            for p in peers:
-                try:
-                    i = yf.Ticker(p).info
-                    peer_data.append({
-                        "Ticker": p,
-                        "Price": i.get('currentPrice'),
-                        "P/E": i.get('trailingPE'),
-                        "Fwd P/E": i.get('forwardPE'),
-                        "EV/EBITDA": i.get('enterpriseToEbitda'),
-                        "P/B": i.get('priceToBook'),
-                        "Margins": i.get('profitMargins')
-                    })
-                except: continue
-            
-            df_peers = pd.DataFrame(peer_data).set_index("Ticker")
-            
-            # 3. Highlight Current Ticker
+            # Highlight Current Ticker
             st.dataframe(
                 df_peers.style.highlight_max(axis=0, color='#1e3d1e').format("{:.2f}"),
                 use_container_width=True
             )
             
-            # 4. Scatter Plot (P/E vs Growth)
-            if not df_peers.empty:
-                fig = px.scatter(
-                    df_peers.reset_index(), 
-                    x='P/E', y='EV/EBITDA', 
-                    text='Ticker', 
-                    size='Price',
-                    title="Relative Valuation Map",
-                    color_discrete_sequence=['#D4AF37']
-                )
-                fig.update_traces(textposition='top center')
-                st.plotly_chart(fig, use_container_width=True)
-
-    except Exception as e:
-        st.error(f"Could not load data for {ticker}. Error: {e}")
-        
+            # Scatter Plot (P/E vs Growth)
+            fig = px.scatter(
+                df_peers.reset_index(), 
+                x='P/E', y='EV/EBITDA', 
+                text='Ticker', 
+                size='Price',
+                title="Relative Valuation Map",
+                color_discrete_sequence=['#D4AF37']
+            )
+            fig.update_traces(textposition='top center')
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("Could not fetch peer data.")
+            
 def render_valuation_sandbox():
     st.title("🧮 Valuation Sandbox (DCF)")
     st.caption("DISCOUNTED CASH FLOW MODEL // INTRINSIC VALUE CALCULATOR")
@@ -3063,6 +3099,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
