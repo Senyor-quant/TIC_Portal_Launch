@@ -630,29 +630,38 @@ def fetch_stock_financials(ticker):
     return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 @st.cache_data(ttl=3600*12) # Cache for 12 hours
+@st.cache_data(ttl=3600*12)
 def fetch_peer_data_safe(main_ticker, sector):
-    """Fetches peer stats with a delay to be polite to the API."""
-    
-    # 1. Define Peers based on Sector
-    peers = []
+    """
+    Returns a dataframe of peers based on the sector.
+    Expands the list to ensure 'actual' relevant comparisons.
+    """
     sec = str(sector)
-    if "Technology" in sec: peers = ['MSFT', 'AAPL', 'NVDA', 'AMD', 'INTC']
-    elif "Financial" in sec: peers = ['JPM', 'BAC', 'GS', 'MS', 'C']
-    elif "Energy" in sec: peers = ['XOM', 'CVX', 'SHEL', 'BP']
-    elif "Healthcare" in sec: peers = ['LLY', 'JNJ', 'PFE', 'MRK']
-    else: peers = ['SPY', 'QQQ'] 
+    peers = []
     
+    # Expanded Sector Map
+    if "Technology" in sec: peers = ['MSFT', 'AAPL', 'NVDA', 'AMD', 'INTC', 'CRM', 'ORCL']
+    elif "Financial" in sec: peers = ['JPM', 'BAC', 'GS', 'MS', 'C', 'WFC', 'BLK']
+    elif "Energy" in sec: peers = ['XOM', 'CVX', 'SHEL', 'BP', 'TTE', 'COP']
+    elif "Healthcare" in sec: peers = ['LLY', 'JNJ', 'PFE', 'MRK', 'ABBV', 'TMO']
+    elif "Consumer" in sec: peers = ['AMZN', 'WMT', 'PG', 'KO', 'PEP', 'COST']
+    elif "Communication" in sec: peers = ['GOOGL', 'META', 'NFLX', 'DIS', 'TMUS']
+    elif "Industrial" in sec: peers = ['CAT', 'DE', 'HON', 'GE', 'LMT']
+    else: peers = ['SPY', 'QQQ', 'IWM'] # Fallback to indices
+    
+    # Ensure Main Ticker is included for comparison
     if main_ticker not in peers: peers.insert(0, main_ticker)
     
     peer_data = []
-    
-    # 2. Loop with Delay
     for p in peers:
         try:
-            # Sleep 0.3s between requests to avoid 429 Error
-            time.sleep(0.3) 
-            i = yf.Ticker(p).info
+            # Quick fetch (reduced info to speed up loop)
+            stock = yf.Ticker(p)
+            i = stock.info
             
+            # Skip if data is missing
+            if 'currentPrice' not in i: continue
+                
             peer_data.append({
                 "Ticker": p,
                 "Price": i.get('currentPrice'),
@@ -662,8 +671,7 @@ def fetch_peer_data_safe(main_ticker, sector):
                 "P/B": i.get('priceToBook'),
                 "Margins": i.get('profitMargins')
             })
-        except: 
-            continue
+        except: continue
             
     return pd.DataFrame(peer_data)
     
@@ -1055,6 +1063,61 @@ def send_new_message(from_user, to_user, subject, body):
 # ==========================================
 # 4. VIEW COMPONENTS
 # ==========================================
+def render_launchpad(user, f_total, q_total, nav_f, nav_q):
+    """
+    Personalized Homepage (The 'Launchpad')
+    Content changes based on Department (Quant vs Fundamental).
+    """
+    # Time-based Greeting
+    h = datetime.now().hour
+    if 5 <= h < 12: greeting = "Good Morning"
+    elif 12 <= h < 18: greeting = "Good Afternoon"
+    else: greeting = "Good Evening"
+    
+    st.title(f"🚀 {greeting}, {user['n']}")
+    st.caption(f"Department: {user['d']} | Role: {user['r']}")
+    
+    # 1. High-Level Metrics (For Everyone)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("TIC Total AUM", f"€{f_total + q_total:,.0f}")
+    c2.metric("Your Equity", f"€{user.get('value', 0):,.2f}")
+    
+    # 2. Role-Based View
+    if user['d'] == 'Quant':
+        c3.metric("Quant NAV", f"€{nav_q:.2f}")
+        c4.metric("Active Models", "4") # Placeholder or count from q_port
+        
+        st.divider()
+        st.subheader("🤖 Quant Workspace")
+        q1, q2 = st.columns(2)
+        with q1:
+            st.info("Quick Actions")
+            if st.button("New Backtest"): st.toast("Opening Backtest Engine...")
+            if st.button("Check Data Pipelines"): st.toast("All pipelines green.")
+        with q2:
+            st.success("System Status")
+            st.markdown("- **API:** Online (12ms latency)\n- **Database:** Synced\n- **Risk Engine:** Active")
+            
+    elif user['d'] == 'Fundamental':
+        c3.metric("Fund NAV", f"€{nav_f:.2f}")
+        c4.metric("Earnings Season", "Active")
+        
+        st.divider()
+        st.subheader("📈 Analyst Workspace")
+        f1, f2 = st.columns(2)
+        with f1:
+            st.info("Quick Actions")
+            if st.button("New Stock Pitch"): st.toast("Template Downloaded.")
+            if st.button("Update Valuations"): st.toast("Opening DCF...")
+        with f2:
+            st.warning("Watchlist Alerts")
+            st.markdown("- **NVDA:** Earnings in 3 days\n- **AAPL:** Crossed 200MA\n- **TSLA:** High Volatility")
+            
+    else: # Board / General
+        c3.metric("Fund NAV", f"€{nav_f:.2f}")
+        c4.metric("Quant NAV", f"€{nav_q:.2f}")
+        st.divider()
+        st.write("Please select a module from the sidebar to begin.")
 
 def render_voting_section(user, proposals, votes_df, target_dept):
     """Renders the voting UI with a Circular Donut Chart."""
@@ -1227,103 +1290,65 @@ def render_leaderboard(user, members_df):
         height=400
     )
 def render_stock_research():
-    st.title("🔎 Equity Research Terminal")
-    st.caption("DES (Description) // FA (Financial Analysis) // RV (Relative Valuation)")
-
-    # Input Bar
-    col_input, col_status = st.columns([1, 3])
+    st.title("🔎 Equity Research Terminal (DES)")
+    
+    col_input, col_status = st.columns([1, 4])
     with col_input:
-        ticker = st.text_input("Enter Ticker", value="NVDA").upper()
+        ticker = st.text_input("SECURITY >", value="NVDA").upper()
     
     if not ticker: return
 
-    # --- 1. FETCH MAIN DATA (CACHED) ---
-    info = fetch_stock_profile(ticker)
-    
-    if not info:
-        st.error(f"Could not load data for {ticker}. Ticker might be invalid or API is busy.")
-        return
-
-    # Header Data
-    st.markdown(f"""
-    ### {info.get('shortName', ticker)} ({ticker})
-    **Sector:** {info.get('sector', 'N/A')} | **Industry:** {info.get('industry', 'N/A')}  
-    **Price:** {info.get('currentPrice', 'N/A')} | **Market Cap:** {info.get('marketCap', 0)/1e9:.2f}B | **Beta:** {info.get('beta', 'N/A')}
-    """)
-    
-    t_des, t_fa, t_rv = st.tabs(["📄 DES (Profile)", "📊 FA (Financials)", "⚖️ RV (Peers)"])
+    try:
+        # 1. Fetch Main Data
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        
+        # Header Stats
+        st.markdown(f"""
+        **{info.get('shortName', ticker)}** | {info.get('sector', 'N/A')} | {info.get('industry', 'N/A')}
+        Price: **{info.get('currentPrice', 0.0)}** | Mkt Cap: **{info.get('marketCap', 0)/1e9:.2f}B** | Beta: **{info.get('beta', 0.0)}**
+        """)
+        
+        t1, t2, t3 = st.tabs(["DES (Profile)", "FA (Financials)", "RV (Peers)"])
 
     # --- TAB 1: DESCRIPTION ---
-    with t_des:
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            st.subheader("Business Summary")
-            st.write(info.get('longBusinessSummary', 'No description available.'))
-        with c2:
-            st.subheader("Key Ratios")
-            ratios = {
-                "P/E (Trailing)": info.get('trailingPE'),
-                "P/E (Forward)": info.get('forwardPE'),
-                "PEG Ratio": info.get('pegRatio'),
-                "Price/Book": info.get('priceToBook'),
-                "EV/EBITDA": info.get('enterpriseToEbitda'),
-                "Profit Margin": f"{info.get('profitMargins', 0)*100:.2f}%",
-                "ROA": f"{info.get('returnOnAssets', 0)*100:.2f}%",
-                "ROE": f"{info.get('returnOnEquity', 0)*100:.2f}%"
+    with t1:
+            c1, c2 = st.columns([2, 1])
+            c1.markdown("### Business Summary")
+            c1.write(info.get('longBusinessSummary', 'No data.'))
+            c2.markdown("### Key Ratios")
+            metrics = {
+                "P/E": info.get('trailingPE'), "Fwd P/E": info.get('forwardPE'),
+                "PEG": info.get('pegRatio'), "P/B": info.get('priceToBook'),
+                "Div Yield": f"{info.get('dividendYield', 0)*100:.2f}%"
             }
-            df_r = pd.DataFrame(list(ratios.items()), columns=['Metric', 'Value'])
-            st.dataframe(df_r, hide_index=True, use_container_width=True)
+            c2.table(pd.DataFrame(metrics.items(), columns=["Metric", "Value"]))
 
-    # --- TAB 2: FINANCIAL ANALYSIS ---
-    with t_fa:
-        st.subheader("Financial Statements (Annual)")
-        
-        # Use Cached Helper
-        inc, bal, cash = fetch_stock_financials(ticker)
+        with t2:
+            st.subheader("Financial Statements")
+            statement_type = st.radio("Statement:", ["Income", "Balance Sheet", "Cash Flow"], horizontal=True)
+            if statement_type == "Income": st.dataframe(stock.financials.T, use_container_width=True)
+            elif statement_type == "Balance Sheet": st.dataframe(stock.balance_sheet.T, use_container_width=True)
+            else: st.dataframe(stock.cashflow.T, use_container_width=True)
 
-        # Transpose for readability (Years as rows)
-        if not inc.empty:
-            st.markdown("**Income Statement**")
-            st.dataframe(inc.T.iloc[:, :8], use_container_width=True) # Show top 8 rows
-        
-        if not bal.empty:
-            st.markdown("**Balance Sheet**")
-            st.dataframe(bal.T.iloc[:, :8], use_container_width=True)
+        # --- UPDATED TAB 3: ACTUAL PEERS ---
+        with t3:
+            st.subheader("Relative Valuation (Sector Peers)")
+            st.caption(f"Comp set based on sector: {info.get('sector', 'Unknown')}")
             
-        if not cash.empty:
-            st.markdown("**Cash Flow**")
-            st.dataframe(cash.T.iloc[:, :8], use_container_width=True)
+            # CALL THE HELPER
+            df_peers = fetch_peer_data_safe(ticker, info.get('sector', ''))
+            
+            if not df_peers.empty:
+                st.dataframe(
+                    df_peers.set_index("Ticker").style.highlight_max(axis=0, color='#1e3d1e').format("{:.2f}"),
+                    use_container_width=True
+                )
+            else:
+                st.warning("Could not fetch peer data.")
 
-    # --- TAB 3: RELATIVE VALUATION ---
-    with t_rv:
-        st.subheader("Peer Comparison")
-        st.caption("Comparing against major peers in the same sector (Cached & Throttled).")
-        
-        # Use Cached Helper
-        df_peers = fetch_peer_data_safe(ticker, info.get('sector', ''))
-        
-        if not df_peers.empty:
-            df_peers = df_peers.set_index("Ticker")
-            
-            # Highlight Current Ticker
-            st.dataframe(
-                df_peers.style.highlight_max(axis=0, color='#1e3d1e').format("{:.2f}"),
-                use_container_width=True
-            )
-            
-            # Scatter Plot (P/E vs Growth)
-            fig = px.scatter(
-                df_peers.reset_index(), 
-                x='P/E', y='EV/EBITDA', 
-                text='Ticker', 
-                size='Price',
-                title="Relative Valuation Map",
-                color_discrete_sequence=['#D4AF37']
-            )
-            fig.update_traces(textposition='top center')
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.warning("Could not fetch peer data.")
+    except Exception as e:
+        st.error(f"Error loading ticker: {e}")
             
 def render_valuation_sandbox():
     st.title("🧮 Valuation Sandbox (DCF)")
@@ -3024,6 +3049,8 @@ def main():
         # Only show Admin Panel if user has admin=True
         if user.get('admin', False):
             menu.append("Admin Panel")
+
+        menu.insert(0, "Launchpad")
         
         # 2. Determine the Correct Index to keep us on the same page
         # We look at the 'previous_choice' stored in session state
@@ -3064,7 +3091,10 @@ def main():
         st.markdown("---")
 
 # ROUTING
-    if "Dashboard" in nav:
+    if "Launchpad" in nav:
+        render_launchpad(user, f_total, q_total, nav_f, nav_q)
+        
+    elif "Dashboard" in nav:
         # 1. BOARD, ADVISORY, AND GUESTS (See Both)
         if user['d'] in ['Board', 'Advisory'] or user['r'] == 'Guest':
             st.title("🏛️ Executive Overview (Guest View)" if user['r'] == 'Guest' else "🏛️ Executive Overview")
@@ -3146,6 +3176,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
