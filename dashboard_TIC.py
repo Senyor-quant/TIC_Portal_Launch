@@ -1224,46 +1224,7 @@ def render_valuation_sandbox():
 
 def render_calendar_view(user, all_events):
     st.title("🗓️ Smart Calendar")
-    # Filter for market events in the future
-    today = datetime.now()
-    future_market = [e for e in all_events if e.get('type') == 'market' and 
-                     datetime.strptime(e['date'], '%Y-%m-%d') >= today]
-    
-    if future_market:
-        # Sort by date
-        future_market.sort(key=lambda x: x['date'])
-        next_event = future_market[0]
-        days_left = (datetime.strptime(next_event['date'], '%Y-%m-%d') - today).days + 1
-        
-        # Visual Countdown
-        st.info(f"🔔 **Next Major Event:** {next_event['ticker']} Earnings in **{days_left} days** ({next_event['date']})")
-        # Progress bar representing "urgency" (closer = fuller)
-        urgency = max(0, min(1.0, 1 - (days_left / 30)))
-        st.progress(urgency, text="Urgency Level")
-    
     st.caption(f"Showing events for: {user['n']} ({user['d']} Dept)")
-    is_board_or_admin = user['d'] in ['Board', 'Advisory'] or user.get('admin', False)
-    if is_board_or_admin:
-        with st.expander("➕ Add New Calendar Event", expanded=False):
-            with st.form("new_event_form"):
-                c_a, c_b = st.columns(2)
-                
-                new_title = c_a.text_input("Event Title (e.g. Q4 Earnings Call)")
-                new_ticker = c_a.text_input("Ticker / Code (e.g. NVDA, BOARD)")
-                new_date = c_b.date_input("Date", datetime.now() + timedelta(days=7))
-                
-                new_type = c_b.selectbox("Type", ["meeting", "macro", "market"])
-                new_audience = st.radio("Audience", ["all", "Board", "Quant", "Fundamental"], horizontal=True)
-                
-                if st.form_submit_button("Save Event to Calendar"):
-                    if new_title and new_date:
-                        if add_calendar_event_gsheet(new_title, new_ticker, new_date, new_type, new_audience):
-                            st.success(f"Event '{new_title}' scheduled!")
-                            st.rerun()
-                        else:
-                            st.error("Failed to save event. Check API connection.")
-                    else:
-                        st.warning("Please enter a Title and Date.")
     
     col_opt, col_cal = st.columns([1, 3])
     
@@ -1281,23 +1242,30 @@ def render_calendar_view(user, all_events):
             
             st.divider()
             st.write("**Toggle Layers**")
-            # FIXED: Capture these boolean values to use in the filter logic below
             show_market = st.checkbox("Market Earnings", value=True)
             show_macro = st.checkbox("Macro Data", value=True)
             show_meet = st.checkbox("Meetings", value=True)
             
-            # Helper to check permissions
             def can_view(event_audience):
                 if event_audience == 'all': return True
-                if event_audience == user['d']: return True # Matches Department
-                if user['d'] == 'Board' and event_audience != 'all': 
-                    return event_audience == 'Board'
+                if event_audience == user['d']: return True
+                if user['d'] == 'Board' and event_audience != 'all': return event_audience == 'Board'
                 return False
 
-            # 1. Filter by Permissions
             my_events = [e for e in all_events if can_view(e['audience'])]
             
-            count = len([e for e in my_events if datetime.strptime(e['date'], '%Y-%m-%d').month == month])
+            # FIX: Use a safe list comprehension to count valid dates only
+            safe_events = []
+            for e in my_events:
+                try:
+                    event_month = datetime.strptime(e['date'], '%Y-%m-%d').month
+                    if event_month == month:
+                        safe_events.append(e)
+                except ValueError:
+                    # Skip rows where date format is invalid
+                    continue
+            
+            count = len(safe_events)
             st.info(f"You have {count} relevant events this month.")
 
     with col_cal:
@@ -1306,8 +1274,7 @@ def render_calendar_view(user, all_events):
         cols = st.columns(7)
         days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
         
-        for i, day in enumerate(days):
-            cols[i].markdown(f"**{day}**", unsafe_allow_html=True)
+        for i, day in enumerate(days): cols[i].markdown(f"**{day}**", unsafe_allow_html=True)
         
         for week in cal:
             cols = st.columns(7)
@@ -1317,27 +1284,22 @@ def render_calendar_view(user, all_events):
                     continue
                 
                 day_str = f"{year}-{month:02d}-{day:02d}"
-                
-                # Get events for this specific day
+                # Find events by comparing simple date strings
                 daily_events = [e for e in my_events if e['date'] == day_str]
                 
-                # Visual Styling
                 is_today = (day == datetime.now().day and month == datetime.now().month)
                 border = "2px solid #D4AF37" if is_today else "1px solid rgba(49, 51, 63, 0.2)"
                 bg = "rgba(49, 51, 63, 0.1)"
                 
                 html_events = ""
                 for e in daily_events:
-                    # FIXED: Apply the Toggle Filters here
                     if e['type'] == 'market' and not show_market: continue
                     if e['type'] == 'macro' and not show_macro: continue
                     if e['type'] == 'meeting' and not show_meet: continue
 
-                    # Color Logic
-                    color = "#0068c9" # Blue (Market default)
+                    color = "#0068c9"
                     if e['type'] == 'meeting':
-                        if e['audience'] == 'all': color = "#228B22" # Green
-                        else: color = "#800080" # Purple (Restricted)
+                        color = "#228B22" if e['audience'] == 'all' else "#800080"
                     
                     html_events += f'<div style="background:{color}; color:white; margin-top:2px; padding:2px 4px; border-radius:3px; font-size:0.7em;">{e["ticker"]}</div>'
 
@@ -1348,7 +1310,7 @@ def render_calendar_view(user, all_events):
                         {html_events}
                     </div>
                     """, unsafe_allow_html=True)
-
+                    
 def render_upcoming_events_sidebar(all_events):
     st.sidebar.divider()
     st.sidebar.subheader("📅 Next 3 Weeks")
@@ -2159,12 +2121,22 @@ def render_risk_macro_dashboard(f_port, q_port):
     elif active_tab == "Market News":
         st.subheader("Market Intelligence")
         news = fetch_macro_news()
-        if news:
-            for item in news[:5]:
-                st.markdown(f"**{item['title']}**")
-                st.caption(f"{item['source']} • {item['published']}")
-                st.markdown(f"_{item['summary']}_")
-                st.markdown("---")
+        
+        if not news:
+            st.warning("RSS Feed unavailable or empty.")
+        else:
+            c_news1, c_news2 = st.columns(2)
+            for i, item in enumerate(news):
+                col = c_news1 if i % 2 == 0 else c_news2
+                with col:
+                    # FIX: Used markdown to render HTML with the link
+                    st.markdown(f"""
+                    <div class="news-item">
+                        <div class="news-source">{item['source']} | {item['published']}</div>
+                        <a class="news-head" href="{item['link']}" target="_blank">{item['title']}</a>
+                        <div class="news-sum">{item['summary']}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
                 
 def render_fundamental_dashboard(user, portfolio, proposals):
     st.title(f"📈 Fundamental Dashboard")
@@ -2804,6 +2776,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
