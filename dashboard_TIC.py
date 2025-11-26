@@ -591,6 +591,24 @@ def load_data():
 # ==========================================
 # 3. HELPER FUNCTIONS
 # ==========================================
+def add_calendar_event_gsheet(title, ticker, date_obj, type_str, audience):
+    """Writes a new calendar event row to the Google Sheet 'Events' tab."""
+    client = init_connection()
+    if not client: return False
+    try:
+        sheet = client.open("TIC_Database_Master")
+        ws = sheet.worksheet("Events")
+        
+        date_str = date_obj.strftime('%Y-%m-%d')
+        new_row = [title, ticker, date_str, type_str, audience]
+        
+        ws.append_row(new_row)
+        st.cache_data.clear() # Clear cache to show the new event immediately
+        return True
+    except Exception as e:
+        st.error(f"Failed to add event: {e}")
+        return False
+        
 def save_attendance_log(date_str, attendance_data):
     """
     Saves attendance for a list of members to Google Sheets.
@@ -1224,6 +1242,28 @@ def render_calendar_view(user, all_events):
         st.progress(urgency, text="Urgency Level")
     
     st.caption(f"Showing events for: {user['n']} ({user['d']} Dept)")
+    is_board_or_admin = user['d'] in ['Board', 'Advisory'] or user.get('admin', False)
+    if is_board_or_admin:
+        with st.expander("➕ Add New Calendar Event", expanded=False):
+            with st.form("new_event_form"):
+                c_a, c_b = st.columns(2)
+                
+                new_title = c_a.text_input("Event Title (e.g. Q4 Earnings Call)")
+                new_ticker = c_a.text_input("Ticker / Code (e.g. NVDA, BOARD)")
+                new_date = c_b.date_input("Date", datetime.now() + timedelta(days=7))
+                
+                new_type = c_b.selectbox("Type", ["meeting", "macro", "market"])
+                new_audience = st.radio("Audience", ["all", "Board", "Quant", "Fundamental"], horizontal=True)
+                
+                if st.form_submit_button("Save Event to Calendar"):
+                    if new_title and new_date:
+                        if add_calendar_event_gsheet(new_title, new_ticker, new_date, new_type, new_audience):
+                            st.success(f"Event '{new_title}' scheduled!")
+                            st.rerun()
+                        else:
+                            st.error("Failed to save event. Check API connection.")
+                    else:
+                        st.warning("Please enter a Title and Date.")
     
     col_opt, col_cal = st.columns([1, 3])
     
@@ -2773,6 +2813,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
