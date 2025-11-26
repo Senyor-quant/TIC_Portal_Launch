@@ -2641,7 +2641,7 @@ def main():
         menu = ["Simulation", inbox_label, "Library", "Calendar", "Settings"] 
 
         # Board AND Advisory Board AND Dept Heads see Dashboards
-        if user['d'] in ['Fundamental', 'Quant', 'Board', 'Advisory']:
+        if user['d'] in ['Fundamental', 'Quant', 'Board', 'Advisory'] or user.get('r') == 'Guest':
             menu.insert(0, "Risk & Macro")
             menu.insert(0, "Dashboard")
             
@@ -2773,6 +2773,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
