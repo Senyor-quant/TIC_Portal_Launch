@@ -591,6 +591,7 @@ def load_data():
 # ==========================================
 # 3. HELPER FUNCTIONS
 # ==========================================
+
 def add_calendar_event_gsheet(title, ticker, date_obj, type_str, audience):
     """Writes a new calendar event row to the Google Sheet 'Events' tab."""
     client = init_connection()
@@ -1787,16 +1788,68 @@ def render_admin_panel(user, members_df, f_port, q_port, f_total, q_total, propo
                     st.write("No votes cast yet.")
         pass
 
+def get_market_status():
+    """Calculates the open/closed status for key global markets in CET."""
+    now = datetime.now()
+    h = now.hour
+    m = now.minute
+    
+    # Simple check for weekends (Mon-Fri only)
+    if now.weekday() >= 5: # 5=Saturday, 6=Sunday
+        return {
+            'US': {'status': 'CLOSED', 'icon': '🔴'},
+            'EU': {'status': 'CLOSED', 'icon': '🔴'},
+            'ASIA': {'status': 'CLOSED', 'icon': '🔴'},
+        }
+
+    # Time in minutes from midnight (0 to 1439)
+    current_minutes = h * 60 + m
+    
+    # --- 1. US MARKET (NYSE/NASDAQ: ~15:30 CET - 22:00 CET) ---
+    # We will use 15:30 (930 min) to 22:00 (1320 min) as an approximation.
+    us_open = 15 * 60 + 30
+    us_close = 22 * 60
+    
+    # --- 2. EUROPE MARKET (Euronext/LSE: ~9:00 CET - 17:30 CET) ---
+    eu_open = 9 * 60
+    eu_close = 17 * 60 + 30
+    
+    # --- 3. ASIA MARKET (Tokyo: ~1:00 CET - 7:30 CET) ---
+    # Tokyo has a lunch break, but for simplicity in the banner, we use the combined block.
+    asia_open = 1 * 60
+    asia_close = 7 * 60 + 30
+
+    # Calculate Status
+    us_status = 'OPEN' if us_open <= current_minutes < us_close else 'CLOSED'
+    eu_status = 'OPEN' if eu_open <= current_minutes < eu_close else 'CLOSED'
+    asia_status = 'OPEN' if asia_open <= current_minutes < asia_close else 'CLOSED'
+    
+    return {
+        'US': {'status': us_status, 'icon': '🟢' if us_status == 'OPEN' else '🔴'},
+        'EU': {'status': eu_status, 'icon': '🟢' if eu_status == 'OPEN' else '🔴'},
+        'ASIA': {'status': asia_status, 'icon': '🟢' if asia_status == 'OPEN' else '🔴'},
+    }
+    
 def render_ticker_tape(data_dict):
     """Renders a ticker tape using the delta from the last hour."""
     
-    # 1. Market Status Indicator
-    now = datetime.now()
-    is_open = 15 <= now.hour <= 22 # Approx US Market Hours in CET
-    status_dot = "🟢" if is_open else "🔴"
-    status_text = "MARKET OPEN 🟢" if is_open else "MARKET CLOSED 🔴"
+    # 1. Market Status Indicators (NEW)
+    market_status = get_market_status()
     
-    # 2. Build Ticker HTML
+    # 2. Build Status HTML (NEW)
+    status_content = f"""
+        <span style="margin-right: 20px; color: #D4AF37; font-weight: 900; letter-spacing: 1px; font-size: 0.9em;">
+            EU {market_status['EU']['icon']}
+        </span>
+        <span style="margin-right: 20px; color: #D4AF37; font-weight: 900; letter-spacing: 1px; font-size: 0.9em;">
+            US {market_status['US']['icon']}
+        </span>
+        <span style="margin-right: 50px; color: #D4AF37; font-weight: 900; letter-spacing: 1px; font-size: 0.9em;">
+            ASIA {market_status['ASIA']['icon']}
+        </span>
+    """
+
+    # 3. Build Ticker HTML (Existing Logic)
     ticker_content = ""
     
     # Loop through all data
@@ -1826,10 +1879,10 @@ def render_ticker_tape(data_dict):
         </span>
         """
     
-    # 3. Add Status at the start
-    full_content = f'<span style="margin-right: 50px; color: #D4AF37; font-weight: 900; letter-spacing: 1px;">{status_dot} {status_text}</span>' + ticker_content
+    # 4. Combine Status and Ticker Content (UPDATED)
+    full_content = status_content + ticker_content
 
-    # 4. Render Animation
+    # 5. Render Animation (Unchanged CSS/HTML)
     st.markdown(
         f"""
         <div class="ticker-container">
@@ -1865,7 +1918,7 @@ def render_ticker_tape(data_dict):
         """,
         unsafe_allow_html=True
     )
-
+    
 def render_offboarding(user):
     if user['r'] == 'Guest':
         st.title("⚙️ Settings (Guest)")
@@ -2800,6 +2853,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
