@@ -3101,33 +3101,34 @@ def main():
         render_ticker_tape(live_data)
 
     with st.sidebar:
-        # --- BLOOMBERG COMMAND BAR ---
-        cmd_input = st.text_input("COMMAND >", placeholder="Type & Hit Enter (e.g., AAPL, RISK)", key="cli_input").upper()
-        
-        if cmd_input:
-            # 1. Navigation Commands
-            if cmd_input in ["RISK", "VAR", "MACRO", "CORR"]:
-                st.session_state['previous_choice'] = "Risk & Macro"
-                st.rerun()
+        with st.form(key='cli_form', clear_on_submit=True):
+            cmd_input = st.text_input("COMMAND >", placeholder="Type & Hit Enter").upper()
+            submit = st.form_submit_button("GO", use_container_width=True)
+            
+            if submit and cmd_input:
+                # 1. Navigation Commands
+                if cmd_input in ["RISK", "VAR", "MACRO", "CORR"]:
+                    st.session_state['previous_choice'] = "Risk & Macro"
+                    st.rerun()
                 
-            elif cmd_input in ["PORT", "FUND", "QUANT", "DASH"]:
-                st.session_state['previous_choice'] = "Dashboard"
-                st.rerun()
+                elif cmd_input in ["PORT", "FUND", "QUANT", "DASH"]:
+                    st.session_state['previous_choice'] = "Dashboard"
+                    st.rerun()
                 
-            elif cmd_input in ["VAL", "DCF", "MODEL"]:
-                st.session_state['previous_choice'] = "Valuation Tool"
-                st.rerun()
+                elif cmd_input in ["VAL", "DCF", "MODEL"]:
+                    st.session_state['previous_choice'] = "Valuation Tool"
+                    st.rerun()
 
-            elif cmd_input in ["HOME", "LAUNCH", "LP"]:
-                st.session_state['previous_choice'] = "Launchpad"
-                st.rerun()
+                elif cmd_input in ["HOME", "LAUNCH", "LP"]:
+                    st.session_state['previous_choice'] = "Launchpad"
+                    st.rerun()
                 
-            # 2. Ticker Lookup (Default behavior)
-            else:
-                # Assume it's a ticker (e.g., "TSLA") -> Go to Research Page
-                st.session_state['previous_choice'] = "Stock Research"
-                st.session_state['cli_ticker'] = cmd_input
-                st.rerun()
+                # 2. Ticker Lookup (Default behavior)
+                else:
+                    # Assume it's a ticker (e.g., "TSLA") -> Go to Research Page
+                    st.session_state['previous_choice'] = "Stock Research"
+                    st.session_state['cli_ticker'] = cmd_input
+                    st.rerun()
         
         # TIC LOGO
         st.image(TIC_LOGO, width=150)
@@ -3319,6 +3320,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
