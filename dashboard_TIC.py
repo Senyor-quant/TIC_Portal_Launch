@@ -585,6 +585,37 @@ def load_data():
 # ==========================================
 # 3. HELPER FUNCTIONS
 # ==========================================
+def style_bloomberg_chart(fig):
+    """
+    Applies the classic Black/Amber/Neon terminal styling to any Plotly figure.
+    """
+    fig.update_layout(
+        paper_bgcolor='#000000', # True Black background
+        plot_bgcolor='#000000',
+        font=dict(
+            family='Courier New, monospace',
+            size=12,
+            color='#FFA028' # Bloomberg Amber Text
+        ),
+        title_font=dict(size=14, color='#D4AF37'), # Gold Titles
+        xaxis=dict(
+            gridcolor='#333333',
+            linecolor='#FFA028',
+            tickfont=dict(color='#FFA028')
+        ),
+        yaxis=dict(
+            gridcolor='#333333',
+            linecolor='#FFA028',
+            tickfont=dict(color='#FFA028')
+        ),
+        legend=dict(
+            bgcolor='rgba(0,0,0,0)',
+            font=dict(color='#FFA028')
+        ),
+        margin=dict(l=40, r=40, t=40, b=40)
+    )
+    return fig
+    
 @st.cache_data(ttl=3600)
 def fetch_stock_profile(ticker):
     """Fetches the heavy 'info' dictionary with caching and retry logic."""
@@ -1374,7 +1405,8 @@ def render_stock_research():
     
     col_input, col_status = st.columns([1, 4])
     with col_input:
-        ticker = st.text_input("SECURITY >", value="NVDA").upper()
+        default_ticker = st.session_state.get('cli_ticker', 'NVDA')
+        ticker = st.text_input("SECURITY >", value=default_ticker).upper()
     
     if not ticker: return
 
@@ -2640,28 +2672,13 @@ def render_fundamental_dashboard(user, portfolio, proposals):
     bench = fetch_real_benchmark_data(portfolio)
     
     # 2. Plot
-    fig = px.line(
-        bench, 
-        x='Date', 
-        y=['SP500', 'TIC_Fund'], 
-        color_discrete_map={
-            'SP500': '#444444',   # Dark Grey
-            'TIC_Fund': '#D4AF37' # TIC Gold
-        }
-    )
+    fig = px.line(bench, x='Date', y=['SP500', 'TIC_Fund'])
     
-    # 3. Critical Styling updates
-    fig.update_layout(
-        yaxis_title="Value of Investment (Base 100)",
-        xaxis_title=None,
-        legend_title=None,
-        hovermode="x unified" # Shows both values when you hover over one date
-    )
+    # APPLY THEME HERE
+    fig = style_bloomberg_chart(fig)
     
-    # Custom Hover Template to look professional
-    fig.update_traces(
-        hovertemplate="<b>%{y:.2f}</b>" # Shows 105.20 instead of long decimals
-    )
+    # Custom colors for lines (Neon Blue & Gold)
+    fig.update_traces(line=dict(width=2))
     
     st.plotly_chart(fig, use_container_width=True)
     
@@ -3084,6 +3101,35 @@ def main():
         render_ticker_tape(live_data)
 
     with st.sidebar:
+        # --- BLOOMBERG COMMAND BAR ---
+        cmd_input = st.text_input("COMMAND >", placeholder="Type & Hit Enter (e.g., AAPL, RISK)", key="cli_input").upper()
+        
+        if cmd_input:
+            # 1. Navigation Commands
+            if cmd_input in ["RISK", "VAR", "MACRO", "CORR"]:
+                st.session_state['previous_choice'] = "Risk & Macro"
+                st.rerun()
+                
+            elif cmd_input in ["PORT", "FUND", "QUANT", "DASH"]:
+                st.session_state['previous_choice'] = "Dashboard"
+                st.rerun()
+                
+            elif cmd_input in ["VAL", "DCF", "MODEL"]:
+                st.session_state['previous_choice'] = "Valuation Tool"
+                st.rerun()
+
+            elif cmd_input in ["HOME", "LAUNCH", "LP"]:
+                st.session_state['previous_choice'] = "Launchpad"
+                st.rerun()
+                
+            # 2. Ticker Lookup (Default behavior)
+            else:
+                # Assume it's a ticker (e.g., "TSLA") -> Go to Research Page
+                st.session_state['previous_choice'] = "Stock Research"
+                st.session_state['cli_ticker'] = cmd_input
+                st.rerun()
+        
+        # TIC LOGO
         st.image(TIC_LOGO, width=150)
         st.markdown("---")
         
@@ -3273,6 +3319,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
