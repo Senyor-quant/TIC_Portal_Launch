@@ -2827,7 +2827,7 @@ def render_risk_macro_dashboard(f_port, q_port):
 def render_fundamental_dashboard(user, portfolio, proposals):
     st.title(f"📈 Fundamental Dashboard")
     
-    #DOWNLOAD BUTTON
+    # 1. RAW DATA EXPANDER
     with st.expander("📊 View Raw Portfolio Data"):
         st.dataframe(
             portfolio,
@@ -2846,12 +2846,14 @@ def render_fundamental_dashboard(user, portfolio, proposals):
             }
         )
     
+    # 2. PERFORMANCE CHART (Synthetic 6-Month Backtest)
     st.subheader("Performance vs Market (6 Months)")
     
-    # --- NEW SIMULATION LOGIC ---
+    # Run the simulation helper (ensure this function exists in your code)
     with st.spinner("Simulating 6-month historical performance..."):
-        # We pass both portfolios to get the full picture
-        bench_df = fetch_simulated_history(portfolio, q_port if 'q_port' in locals() else pd.DataFrame())
+        # We pass the portfolio. 'q_port' is not strictly needed here if we look at 'portfolio' only
+        # but the helper can handle both. 
+        bench_df = fetch_simulated_history(portfolio, pd.DataFrame()) 
     
     if not bench_df.empty:
         # Create Line Chart
@@ -2862,66 +2864,73 @@ def render_fundamental_dashboard(user, portfolio, proposals):
         fig = style_bloomberg_chart(fig)
         fig.update_layout(yaxis_title="Rebased (100)", legend_title=None)
         
+        # RENDER CHART INSIDE THE IF BLOCK
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.warning("Not enough data to generate performance chart.")
+        st.warning("Not enough historical data to generate performance chart.")
     
-    st.plotly_chart(fig, use_container_width=True)
-    
+    # 3. ALLOCATION & SECTOR ANALYSIS
     c1, c2 = st.columns([1, 2])
     with c1:
         st.subheader("Allocation")
-        fig_pie = px.pie(portfolio, values='target_weight', names='sector', hole=0.4)
-        st.plotly_chart(fig_pie, use_container_width=True)
+        if not portfolio.empty:
+            fig_pie = px.pie(portfolio, values='target_weight', names='sector', hole=0.4)
+            st.plotly_chart(fig_pie, use_container_width=True)
+        else:
+            st.info("No assets to display.")
+
     with c2:
         st.subheader("Sector Performance")
-        # --- FIX: REAL DATA LOGIC ---
+        # --- REAL DATA LOGIC ---
         if not portfolio.empty and 'ticker' in portfolio.columns:
-            # 1. Get tickers (excluding Cash handled by fetch_live...)
+            # 1. Get tickers (excluding Cash)
             tickers = portfolio['ticker'].dropna().unique().tolist()
             
-            # 2. Fetch Real Change %
+            # 2. Fetch Real Change % (cached)
             live_data = fetch_live_prices_with_change(tickers)
             
             # 3. Map the 'pct' change to the dataframe
-            # We use a lambda to look up the ticker in the live_data dict
+            # Use a safe lambda to avoid errors if ticker missing
             portfolio['real_return'] = portfolio['ticker'].map(
                 lambda t: live_data.get(str(t), {}).get('pct', 0.0)
             )
             
-            # 4. Plot with Real Data
+            # 4. Plot Treemap
             fig_tree = px.treemap(
                 portfolio, 
                 path=[px.Constant("Portfolio"), 'sector', 'ticker'], 
                 values='target_weight', 
-                color='real_return', # <--- NOW USES REAL DATA
+                color='real_return',
                 color_continuous_scale='RdYlGn', # Red to Green
-                color_continuous_midpoint=0,     # 0% is the center (Yellow/White)
-                hover_data=['real_return']       # Show the % on hover
+                color_continuous_midpoint=0,     # 0% is center
+                hover_data=['real_return']
             )
             
-            # Update hover label to look nice
             fig_tree.update_traces(hovertemplate='<b>%{label}</b><br>Weight: %{value:.1%}<br>Change: %{customdata[0]:.2f}%')
-            
             st.plotly_chart(fig_tree, use_container_width=True)
 
-            # CONCENTRATION CHECK
-        if not portfolio.empty and 'target_weight' in portfolio.columns:
-            sector_alloc = portfolio.groupby('sector')['target_weight'].sum().sort_values(ascending=False)
+    # 4. CONCENTRATION CHECK
+    if not portfolio.empty and 'target_weight' in portfolio.columns:
+        sector_alloc = portfolio.groupby('sector')['target_weight'].sum().sort_values(ascending=False)
+    
+        if not sector_alloc.empty:
+            top_sector = sector_alloc.index[0]
+            top_weight = sector_alloc.iloc[0]
         
-            if not sector_alloc.empty:
-                top_sector = sector_alloc.index[0]
-                top_weight = sector_alloc.iloc[0]
-            
-                if top_weight > 0.30: # 30% Threshold
-                    st.warning(f"⚠️ High Concentration: {top_sector} makes up {top_weight:.1%} of the portfolio.")
-                else:
-                    st.success(f"✅ Portfolio is well-diversified. Top sector: {top_sector} ({top_weight:.1%})")
+            if top_weight > 0.30: # 30% Threshold
+                st.warning(f"⚠️ High Concentration: {top_sector} makes up {top_weight:.1%} of the portfolio.")
+            else:
+                st.success(f"✅ Portfolio is well-diversified. Top sector: {top_sector} ({top_weight:.1%})")
+    
     st.divider()
     
+    # 5. ACTIVE PROPOSALS
     st.header("🗳️ Active Proposals")
     current_props = [p for p in proposals if p.get('Dept') == 'Fundamental']
     
+    if not current_props:
+        st.info("No active proposals for Fundamental department.")
+
     for p in current_props:
         with st.container(border=True):
             c_a, c_b = st.columns([4, 1])
@@ -2929,7 +2938,7 @@ def render_fundamental_dashboard(user, portfolio, proposals):
             c_a.write(p.get('Description'))
             c_a.caption(f"Closes: {p.get('End_Date')}")
             c_b.metric("Votes", "TBD")
-
+            
 def render_quant_dashboard(user, portfolio, proposals):
     st.title(f"🤖 Quant Lab")
     # --- 2. STRATEGY OVERVIEW ---
@@ -3549,6 +3558,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
