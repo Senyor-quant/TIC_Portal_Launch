@@ -701,94 +701,109 @@ def load_data():
 # ==========================================
 # 3. HELPER FUNCTIONS
 # ==========================================
-@st.cache_data(ttl=3600*12) # Cache for 12 hours (History doesn't change fast)
+@st.cache_data(ttl=3600*12)
 def fetch_simulated_history(f_port, q_port):
     """
     Creates a synthetic 6-month backtest.
-    Assumes current holdings were held constant for the last 6 months.
-    Uses Weighted Average Return to be currency-neutral.
+    Robust version: Handles string conversion and API failures gracefully.
     """
     # 1. Prepare Data
-    # Combine portfolios
     combined = pd.concat([f_port, q_port], ignore_index=True)
     
-    if combined.empty or 'market_value' not in combined.columns:
+    if combined.empty:
         return pd.DataFrame()
 
-    # 2. Filter for Non-Cash Assets (Stocks only for the curve)
-    # We filter out "CASH", "EUR", "USD" to see the equity performance
-    # If you want to see the dampening effect of cash, remove this filter logic.
-    is_cash = combined['ticker'].astype(str).str.upper().isin(["CASH", "EUR", "EURO", "USD", "GBP", "JPY"])
-    # Also check "CASH_" prefix just in case
-    is_cash = is_cash | combined['ticker'].astype(str).str.upper().str.contains("CASH_")
+    # --- SAFETY: Force Numeric Conversion ---
+    if 'market_value' in combined.columns:
+        combined['market_value'] = pd.to_numeric(combined['market_value'], errors='coerce').fillna(0.0)
+    else:
+        return pd.DataFrame() # No value column
+        
+    # 2. Filter for Non-Cash Assets
+    # We exclude currencies to see pure equity performance
+    # Also exclude tickers that look like "CASH_USD"
+    is_cash = combined['ticker'].astype(str).str.upper().isin(["CASH", "EUR", "EURO", "USD", "GBP", "JPY", "CHF"])
+    is_cash = is_cash | combined['ticker'].astype(str).str.upper().str.startswith("CASH")
     
     equity_df = combined[~is_cash].copy()
     
-    if equity_df.empty:
-        # Return dummy data if only cash
-        dates = pd.date_range(end=datetime.now(), periods=100)
-        return pd.DataFrame({'Date': dates, 'SP500': 100, 'TIC_Fund': 100})
+    # 3. Handle Empty Equity (e.g. 100% Cash Portfolio)
+    # Return a flat line so the dashboard doesn't show an error
+    if equity_df.empty or equity_df['market_value'].sum() == 0:
+        dates = pd.date_range(end=datetime.now(), periods=120, freq='B') # Business days
+        return pd.DataFrame({
+            'Date': dates, 
+            'SP500': 100.0, 
+            'TIC_Fund': 100.0
+        })
 
-    # 3. Calculate Weights
+    # 4. Calculate Weights
     total_equity_val = equity_df['market_value'].sum()
-    if total_equity_val == 0: return pd.DataFrame()
-    
     equity_df['weight'] = equity_df['market_value'] / total_equity_val
     
-    # 4. Identify Tickers to Fetch
-    # Map tickers to Yahoo format (handle the UK .L issue again)
+    # 5. Identify Tickers to Fetch
     fetch_map = {}
     for t in equity_df['ticker'].unique():
         clean_t = str(t).upper().strip()
+        
+        # Handle UK (.L) and Japan (.T)
         if clean_t.endswith(".") or clean_t.endswith(".L"):
             y_t = clean_t + "L" if clean_t.endswith(".") else clean_t
             fetch_map[clean_t] = y_t
         elif clean_t.endswith(".T"):
-             fetch_map[clean_t] = clean_t # Japan works as is
+             fetch_map[clean_t] = clean_t 
         else:
             fetch_map[clean_t] = clean_t
             
     tickers_to_download = list(set(fetch_map.values()))
     tickers_to_download.append("^GSPC") # Add Benchmark
 
-    # 5. Download History
+    # DEBUG: Print to console what we are trying to fetch
+    print(f"DEBUG: Simulating history for: {tickers_to_download}")
+
+    # 6. Download History
     try:
         data = yf.download(tickers_to_download, period="6mo", progress=False)['Close']
         
-        # Forward fill to handle different holidays in different countries
+        # Forward fill to handle different holidays
         data = data.ffill().dropna()
         
-        if data.empty: return pd.DataFrame()
+        if data.empty: 
+            print("DEBUG: Yahoo returned empty data.")
+            return pd.DataFrame()
         
-        # 6. Normalize Data (Start at 100)
+        # 7. Normalize Data (Start at 100)
         # Formula: (Price_t / Price_0) * 100
+        # Check if benchmark is present, if not, create dummy
+        if '^GSPC' not in data.columns:
+            data['^GSPC'] = 100.0
+
         normalized = (data / data.iloc[0]) * 100
         
-        # 7. Construct Portfolio Curve
-        # Start with 0
+        # 8. Construct Portfolio Curve
         portfolio_curve = pd.Series(0.0, index=normalized.index)
         
-        # Loop through assets and add weighted curve
         for raw_t, y_t in fetch_map.items():
             if y_t in normalized.columns:
-                # Get weight from our dataframe
-                # Sum in case of duplicates
                 w = equity_df.loc[equity_df['ticker'] == raw_t, 'weight'].sum()
-                
-                # Add (Normalized_Curve * Weight) to total
                 portfolio_curve += normalized[y_t] * w
+            else:
+                # If a ticker failed to download, we assume it stayed flat (cash drag)
+                # to prevent the curve from dropping to 0
+                w = equity_df.loc[equity_df['ticker'] == raw_t, 'weight'].sum()
+                portfolio_curve += 100.0 * w
                 
-        # 8. Final DataFrame
+        # 9. Final DataFrame
         df_chart = pd.DataFrame({
             'Date': normalized.index,
-            'SP500': normalized['^GSPC'] if '^GSPC' in normalized.columns else 100,
+            'SP500': normalized['^GSPC'],
             'TIC_Fund': portfolio_curve
         })
         
         return df_chart.reset_index(drop=True)
         
     except Exception as e:
-        print(f"History Error: {e}")
+        print(f"History Simulation Error: {e}")
         return pd.DataFrame()
         
 def style_bloomberg_chart(fig):
@@ -3558,6 +3573,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
