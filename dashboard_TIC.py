@@ -480,19 +480,26 @@ def load_data():
         
         for t in sheet_tickers:
             # CASE A: Base Currency (Euro)
-            if t in ["CASH", "EUR", "EURO"]:
-                yahoo_map[t] = None # No fetch needed, price is 1.0
+            if clean_t in ["EUR", "EURO", "CASH"]:
+                yahoo_map[t] = None 
                 
             # CASE B: Foreign Currency (Convert to EUR)
-            elif t in currencies:
-                fx_ticker = f"{t}EUR=X" # Yahoo format for "1 Unit of T to EUR"
-                yahoo_map[t] = fx_ticker
+            elif clean_t in currencies:
+                fx_ticker = f"{clean_t}EUR=X" 
+                yahoo_map[t] = fx_ticker      
                 to_fetch.append(fx_ticker)
+
+            # CASE C: UK Stocks (e.g. "RR." or "SHEL.L")
+            # If it ends in dot (RR.) or has .L, treat as UK
+            elif t.endswith(".") or t.endswith(".L"):
+                # Ensure it ends in .L for Yahoo
+                y_ticker = t + "L" if t.endswith(".") else t
+                yahoo_map[t] = y_ticker
+                to_fetch.append(y_ticker)
+                uk_tickers.append(y_ticker) # Mark for /100 division later
                 
-            # CASE C: Standard Asset (Stock/ETF)
+            # CASE D: Standard Asset
             else:
-                # If user explicitly wrote "CASH_USD", handle it if needed, 
-                # otherwise assume it's a regular ticker
                 yahoo_map[t] = t
                 to_fetch.append(t)
 
@@ -3378,6 +3385,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
