@@ -1283,7 +1283,7 @@ def render_launchpad(user, f_total, q_total, nav_f, nav_q, f_port, q_port, calen
             st.button("🔎 DCF Model")
 
     # ==========================================
-    # 5. BOARD / GENERAL VIEW (FIXED)
+    # 5. BOARD / GENERAL VIEW
     # ==========================================
     else: 
         c3.metric("Fund NAV", f"€{nav_f:.2f}")
@@ -1292,25 +1292,32 @@ def render_launchpad(user, f_total, q_total, nav_f, nav_q, f_port, q_port, calen
         st.divider()
         st.subheader("🏛️ Board Overview")
         
-        # --- FIXED CALCULATION LOGIC ---
         cash_total = 0.0
         
-        # 1. Fundamental Cash
-        if not f_port.empty and 'ticker' in f_port.columns:
-            # Find rows with "CASH"
-            mask = f_port['ticker'].str.contains("CASH", case=False, na=False)
-            # Convert to numeric before summing (Handles "€1,000" strings)
-            cash_vals = pd.to_numeric(f_port.loc[mask, 'market_value'], errors='coerce').fillna(0)
-            cash_total += cash_vals.sum()
-            
-        # 2. Quant Cash
-        if not q_port.empty:
-            q_tick = 'ticker' if 'ticker' in q_port.columns else 'model_id'
-            if q_tick in q_port.columns:
-                mask_q = q_port[q_tick].str.contains("CASH", case=False, na=False)
-                # Convert to numeric
-                q_vals = pd.to_numeric(q_port.loc[mask_q, 'market_value'], errors='coerce').fillna(0)
-                cash_total += q_vals.sum()
+        # List of things that count as Cash
+        currency_codes = ["CASH", "EUR", "EURO", "USD", "GBP", "JPY", "CHF", "CAD", "AUD"]
+        
+        def get_cash_value(df):
+            val = 0.0
+            if not df.empty:
+                # Identify column name
+                t_col = 'ticker' if 'ticker' in df.columns else 'model_id'
+                
+                if t_col in df.columns:
+                    # 1. Normalize tickers to uppercase
+                    temp_tickers = df[t_col].astype(str).str.upper().str.strip()
+                    
+                    # 2. Filter: Is it in the currency list OR does it contain "CASH"?
+                    # This catches "EUR", "USD", "CASH_USD", "LIQUID_CASH", etc.
+                    is_cash = temp_tickers.isin(currency_codes) | temp_tickers.str.contains("CASH")
+                    
+                    # 3. Sum the 'market_value' (which was calculated in load_data)
+                    val = df.loc[is_cash, 'market_value'].sum()
+            return val
+
+        # Sum both portfolios
+        cash_total += get_cash_value(f_port)
+        cash_total += get_cash_value(q_port)
              
         b1, b2 = st.columns(2)
         with b1:
@@ -3371,6 +3378,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
