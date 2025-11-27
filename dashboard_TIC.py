@@ -243,19 +243,25 @@ def fetch_correlation_data(tickers):
         # print(f"Correlation Error: {e}") # Uncomment for debugging
         return pd.DataFrame()
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300)  # Cache for 5 mins to prevent overload
 def fetch_live_prices_with_change(tickers):
-    """Fetches Price AND Hourly Change for all tickers."""
+    """
+    Fetches Price AND Hourly Change for all tickers.
+    Refreshes only once per hour to save API limits.
+    """
     if not tickers: return {}
     
-    # Clean tickers
+    # Clean tickers: Ensure strings, uppercase, no empty values
     clean_tickers = list(set([
-        str(t) for t in tickers 
+        str(t).upper().strip() for t in tickers 
         if isinstance(t, str) and t and "CASH" not in t.upper()
     ]))
     
+    if not clean_tickers: return {}
+
     try:
-        # Fetch 1 day of data with 1-hour intervals to get the "Last Hour" change
+        # Fetch 1 day of data to calculate change
+        # Threads=True speeds up the download significantly
         data = yf.download(
             clean_tickers, 
             period="1d", 
@@ -266,34 +272,32 @@ def fetch_live_prices_with_change(tickers):
         )
         
         results = {}
-        
-        # Handle Single Ticker vs Multiple Ticker structure in yfinance
         is_multi = len(clean_tickers) > 1
         
         for t in clean_tickers:
             try:
-                # Get the specific dataframe for this ticker
+                # Handle Multi-Index vs Single Index returns from yfinance
                 df = data[t] if is_multi else data
                 
-                # We need at least 2 rows to calculate a change
+                # Get valid close prices
                 valid_rows = df['Close'].dropna()
                 
-                if len(valid_rows) >= 1:
-                    current_price = valid_rows.iloc[-1]
+                if not valid_rows.empty:
+                    current_price = float(valid_rows.iloc[-1])
                     
-                    # Calculate change from previous hour (if available)
+                    # Calculate hourly change (delta)
                     if len(valid_rows) >= 2:
-                        prev_price = valid_rows.iloc[-2]
+                        prev_price = float(valid_rows.iloc[-2])
                         change = current_price - prev_price
-                        pct_change = (change / prev_price) * 100
+                        pct_change = (change / prev_price) * 100 if prev_price != 0 else 0.0
                     else:
                         change = 0.0
                         pct_change = 0.0
                         
                     results[t] = {
-                        'price': round(float(current_price), 2),
-                        'change': round(float(change), 2),
-                        'pct': round(float(pct_change), 2)
+                        'price': round(current_price, 2),
+                        'change': round(change, 2),
+                        'pct': round(pct_change, 2)
                     }
                 else:
                     results[t] = {'price': 0.0, 'change': 0.0, 'pct': 0.0}
@@ -304,8 +308,8 @@ def fetch_live_prices_with_change(tickers):
         return results
         
     except Exception as e:
-        print(f"Ticker Error: {e}")
-        return {}
+        print(f"Price Fetch Error: {e}")
+        return {}        
         
 @st.cache_data(ttl=3600*4)
 def fetch_real_benchmark_data(portfolio_df):
@@ -430,7 +434,6 @@ def load_data():
     # 1. Fetch Data (Parallelized & Split)
     f_port_raw, q_port_raw, df_mem, evts = load_static_data()
     msgs, df_props, df_votes, att_raw = load_dynamic_data()
-    
     # 2. Initialize Defaults
     members = pd.DataFrame()
     f_port = pd.DataFrame(); q_port = pd.DataFrame()
@@ -445,48 +448,70 @@ def load_data():
         except: return 0.0
 
     def calculate_live_total(df):
+        """
+        Calculates portfolio value by: Units (from Sheet) * Price (from Yahoo).
+        """
         total_val = 0.0
-        if not df.empty:
-            df.columns = df.columns.astype(str).str.lower().str.strip()
-            ticker_col = None
-            if 'ticker' in df.columns: ticker_col = 'ticker'
-            elif 'model_id' in df.columns: ticker_col = 'model_id'
-            
-            if not ticker_col:
-                return (clean_float(df['total'].iloc[0]) if 'total' in df.columns else 0.0), df
+    
+        if df.empty:
+            return 0.0, df
 
-            # Batch fetch prices for speed
-            tickers = [t for t in df[ticker_col].unique() if isinstance(t, str) and "CASH" not in t.upper()]
-            prices = fetch_live_prices_with_change(tickers)
+        # Normalize columns
+        df.columns = df.columns.astype(str).str.lower().str.strip()
+    
+        # Identify key columns
+        ticker_col = 'ticker' if 'ticker' in df.columns else 'model_id'
+    
+        # 1. BATCH FETCH PRICES (This hits the 1-hour cache)
+        # We only fetch tickers that are NOT cash
+        tickers_to_fetch = [
+            t for t in df[ticker_col].unique() 
+            if isinstance(t, str) and "CASH" not in t.upper()
+        ]
+        price_map = fetch_live_prices_with_change(tickers_to_fetch)
+
+        # 2. Iterate and Calculate
+        for index, row in df.iterrows():
+            ticker = str(row.get(ticker_col, '')).upper().strip()
+        
+            # Get Units (Quantity) from Sheet
+            units = 0.0
+            if 'units' in df.columns: 
+                units = clean_float(row.get('units', 0))
+            elif 'allocation' in df.columns: 
+                # Fallback for Quant if using % allocation instead of units
+                units = clean_float(row.get('allocation', 0))
             
-            for index, row in df.iterrows():
-                ticker = str(row.get(ticker_col, ''))
-                units = 0.0
-                if 'units' in df.columns: units = clean_float(row.get('units', 0))
-                elif 'allocation' in df.columns: units = clean_float(row.get('allocation', 0))
-                
-                sheet_val = 0.0
-                if 'market_value' in df.columns: sheet_val = clean_float(row.get('market_value', 0))
-                
-                if "CASH" in ticker.upper():
-                    val = sheet_val
+            # Get Sheet Value (Only used as fallback or for CASH)
+            sheet_val = clean_float(row.get('market_value', 0))
+        
+            # --- CALCULATION LOGIC ---
+            if "CASH" in ticker:
+                # CASH: Trust the sheet value (e.g., bank balance)
+                row_val = sheet_val
+            else:
+                # STOCK: Always calculate Units * Live Price
+                live_price = price_map.get(ticker, {}).get('price', 0.0)
+            
+                if live_price > 0:
+                    row_val = units * live_price
                 else:
-                    live_price = prices.get(ticker, {}).get('price', 0.0)
-                    val = (live_price * units) if live_price > 0 and units > 0 else sheet_val
-                
-                total_val += val
+                    # Fallback: If Yahoo is dead, use Sheet Value to prevent portfolio showing €0
+                    row_val = sheet_val 
+
+            # Update the dataframe 'market_value' column for display
+            # This ensures the dashboard table matches the big total
+            df.at[index, 'market_value'] = row_val
+        
+            total_val += row_val
+
         return total_val, df
 
     if not f_port_raw.empty:
         f_total, f_port = calculate_live_total(f_port_raw)
-        if 'target_weight' in f_port.columns: 
-            f_port['target_weight'] = f_port['target_weight'].apply(clean_float)
 
     if not q_port_raw.empty:
         q_total, q_port = calculate_live_total(q_port_raw)
-        if 'ticker' in q_port.columns: q_port = q_port.rename(columns={'ticker': 'model_id'})
-        if 'target_weight' in q_port.columns: q_port = q_port.rename(columns={'target_weight': 'allocation'})
-        if 'allocation' in q_port.columns: q_port['allocation'] = q_port['allocation'].apply(clean_float)
 
     # 4. Process Members & Calculate NAV (Unitized System)
     members_list = []
@@ -3312,6 +3337,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
