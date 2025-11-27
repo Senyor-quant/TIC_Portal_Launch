@@ -509,9 +509,15 @@ def load_data():
 
     if not f_port_raw.empty:
         f_total, f_port = calculate_live_total(f_port_raw)
+        if 'target_weight' in f_port.columns: 
+            f_port['target_weight'] = f_port['target_weight'].apply(clean_float)
 
     if not q_port_raw.empty:
         q_total, q_port = calculate_live_total(q_port_raw)
+        if 'ticker' in q_port.columns: q_port = q_port.rename(columns={'ticker': 'model_id'})
+        if 'target_weight' in q_port.columns: q_port = q_port.rename(columns={'target_weight': 'allocation'})
+        if 'allocation' in q_port.columns: 
+            q_port['allocation'] = q_port['allocation'].apply(clean_float)
 
     # 4. Process Members & Calculate NAV (Unitized System)
     members_list = []
@@ -3337,6 +3343,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
