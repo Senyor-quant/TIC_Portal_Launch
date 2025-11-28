@@ -72,6 +72,28 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+try:
+    client = init_connection()
+    if client:
+        st.success("✅ Google API Connection Successful")
+        sh = client.open("TIC_Database_Master")
+        st.info(f"📁 Found Spreadsheet: {sh.title}")
+        
+        # Print all available tab names
+        worksheets = [ws.title for ws in sh.worksheets()]
+        st.write("📑 Available Tabs:", worksheets)
+        
+        # Check Members specifically
+        if "Members" in worksheets:
+            m_data = sh.worksheet("Members").get_all_records()
+            st.write(f"👥 Member Count: {len(m_data)}")
+        else:
+            st.error("❌ 'Members' tab NOT found. Please rename it.")
+    else:
+        st.error("❌ Failed to authenticate (Client is None). Check secrets.toml.")
+except Exception as e:
+    st.error(f"❌ CRITICAL ERROR: {e}")
+
 TIC_LOGO = "https://media.licdn.com/dms/image/v2/D4D0BAQEBPgrthbI7xQ/company-logo_200_200/B4DZoGPeNMJIAI-/0/1761041311048/tilburginvestmentclub_logo?e=1765411200&v=beta&t=cQ2EYv-uszLRoEOqyTbDj_-k9kwcle3ZIos4jcMdq9Q"
 
 st.markdown("""
@@ -3549,6 +3571,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
