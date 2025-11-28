@@ -1321,7 +1321,12 @@ def render_launchpad(user, f_total, q_total, nav_f, nav_q, f_port, q_port, calen
         )
     # 2. Global Ticker (Mini)
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("TIC Total AUM", f"€{f_total + q_total:,.0f}")
+    # Calc (short for calculator) Total TIC AUM + TOP DIFF
+    c1.metric(
+        "TIC Total AUM", 
+        f"€{f_total + q_total:,.0f}", 
+        f"{total_delta_eur:+,.0f} €" 
+    )
     
     # Calculate User's Personal Performance
     u_val = user.get('value', 0)
@@ -3370,6 +3375,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
