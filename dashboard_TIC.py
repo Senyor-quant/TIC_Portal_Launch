@@ -635,6 +635,7 @@ def load_data():
     nav_quant = 100.00 # Default Par Value if fund is empty
 
     if not df_mem.empty:
+        # Strip whitespace from headers to match 'Deposit Pending' correctly
         df_mem.columns = df_mem.columns.astype(str).str.strip()
         
         # A. Sum Total Units Outstanding (The Denominator)
@@ -687,6 +688,7 @@ def load_data():
             
             try: dep_val = clean_float(row.get('Deposit Pending', 0))
             except: dep_val = 0.0
+            # ------------------------------------------------------
             
             last_active = str(row.get('Last Login', 'Never'))
             last_p = str(row.get('Last_Page', 'Launchpad'))
@@ -696,6 +698,7 @@ def load_data():
                 'r': role_data['r'], 'd': role_data['d'], 's': role_data['s'], 
                 'admin': role_data.get('admin', False),
                 'status': 'Pending' if liq_val == 1 else 'Active', 'liq_pending': liq_val,
+                'deposit_pending': dep_val,
                 'contribution': clean_float(row.get('Initial Investment', 0)),
                 'value': real_value, # <--- This is now dynamically calculated
                 'units_fund': u_f,
@@ -3550,6 +3553,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
