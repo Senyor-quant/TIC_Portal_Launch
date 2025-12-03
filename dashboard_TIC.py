@@ -768,8 +768,7 @@ def check_password(plain_password, stored_password):
         return True, False # Valid and already secure
         
     return False, False
-    
-@st.cache_data(ttl=3600*12)
+    @st.cache_data(ttl=3600*12)
 def fetch_simulated_history(f_port, q_port):
     """
     TEMPORARY DEMO MODE:
@@ -782,20 +781,17 @@ def fetch_simulated_history(f_port, q_port):
     
     try:
         # 2. Fetch ONLY the Benchmark (Reliable)
-        # Using a distinct ticker like ^GSPC usually works best
         data = yf.download('^GSPC', start=start_date, end=end_date, progress=False)
         
-        # Handle yfinance structure (getting just the Close column)
+        # Handle yfinance structure
         if 'Close' in data.columns:
             spy = data['Close']
         else:
             spy = data
             
-        # If MultiIndex (Price, Ticker), squeeze it to a Series
         if isinstance(spy, pd.DataFrame):
             spy = spy.squeeze()
 
-        # Clean Data
         spy = spy.dropna()
         
         if spy.empty:
@@ -804,14 +800,14 @@ def fetch_simulated_history(f_port, q_port):
         # 3. Create Benchmark Curve (Normalized to 100)
         spy_curve = (spy / spy.iloc[0]) * 100
         
-        # 4. Create Synthetic Portfolio Curve (SPY + Random Noise)
-        # We generate random daily returns slightly different from SPY
-        # Noise mean=0, std=0.008 (0.8% daily deviation)
+        # 4. Create Synthetic Portfolio Curve
         days = len(spy_curve)
-        noise = np.random.normal(0, 0.008, days)
         
-        # Create a cumulative multiplier (Random Walk)
-        # We add 1.0 to simulate small alpha/tracking error
+        # --- THE FIX IS HERE ---
+        # Changed mean from 0 to 0.0004. 
+        # This adds ~0.04% daily "alpha", resulting in a ~5% beat over 6 months.
+        noise = np.random.normal(0.0004, 0.008, days)
+        
         cumulative_drift = np.cumprod(1 + noise)
         
         # Apply drift to SPY curve
@@ -830,7 +826,7 @@ def fetch_simulated_history(f_port, q_port):
         return df_chart.reset_index(drop=True)
 
     except Exception as e:
-        # Fallback: Generate completely fake flat lines if API fails entirely
+        # Fallback
         dates = pd.date_range(start=start_date, end=end_date, freq='B')
         return pd.DataFrame({
             'Date': dates, 
@@ -3492,6 +3488,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
