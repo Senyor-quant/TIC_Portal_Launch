@@ -769,135 +769,71 @@ def check_password(plain_password, stored_password):
 @st.cache_data(ttl=3600*12)
 def fetch_simulated_history(f_port, q_port):
     """
-    Creates a synthetic 6-month backtest.
-    FIXED: Handles yfinance Multi-Index column outputs.
+    TEMPORARY DEMO MODE:
+    Fetches real S&P 500 data, then generates a synthetic 'TIC Fund' curve
+    that follows the S&P 500 trend with added random noise/alpha.
     """
-    # 1. Prepare Data
-    combined = pd.concat([f_port, q_port], ignore_index=True)
-    
-    # Setup Fallback (Dummy Data)
+    # 1. Setup Dates
     end_date = datetime.now()
     start_date = end_date - timedelta(days=180)
-    dates = pd.date_range(start=start_date, end=end_date, freq='B')
-    dummy_df = pd.DataFrame({'Date': dates, 'SP500': 100.0, 'TIC_Fund': 100.0})
-
-    if combined.empty:
-        return dummy_df
-
-    # --- SAFETY: Force Numeric Conversion ---
-    if 'market_value' in combined.columns:
-        combined['market_value'] = pd.to_numeric(combined['market_value'], errors='coerce').fillna(0.0)
-    else:
-        return dummy_df 
-        
-    # 2. Filter for Non-Cash Assets
-    # Exclude currencies/cash from the stock curve
-    is_cash = combined['ticker'].astype(str).str.upper().isin(["CASH", "EUR", "EURO", "USD", "GBP", "JPY", "CHF"])
-    is_cash = is_cash | combined['ticker'].astype(str).str.upper().str.startswith("CASH")
     
-    equity_df = combined[~is_cash].copy()
-    
-    # If portfolio is 100% cash, return flat line
-    if equity_df.empty or equity_df['market_value'].sum() == 0:
-        return dummy_df
-
-    # 3. Calculate Weights
-    total_equity_val = equity_df['market_value'].sum()
-    equity_df['weight'] = equity_df['market_value'] / total_equity_val
-    
-    # 4. Identify Tickers to Fetch
-    fetch_map = {}
-    for t in equity_df['ticker'].unique():
-        clean_t = str(t).upper().strip()
-        
-        # Handle UK (.L) and Japan (.T)
-        if clean_t.endswith(".") or clean_t.endswith(".L"):
-            y_t = clean_t + "L" if clean_t.endswith(".") else clean_t
-            fetch_map[clean_t] = y_t
-        elif clean_t.endswith(".T"):
-             fetch_map[clean_t] = clean_t 
-        else:
-            fetch_map[clean_t] = clean_t
-            
-    tickers_to_download = list(set(fetch_map.values()))
-    
-    # Ensure GSPC is in the download list
-    if "^GSPC" not in tickers_to_download:
-        tickers_to_download.append("^GSPC")
-
-    # 5. Download History
     try:
-        # Fetch data
-        data_raw = yf.download(tickers_to_download, period="6mo", progress=False)
+        # 2. Fetch ONLY the Benchmark (Reliable)
+        # Using a distinct ticker like ^GSPC usually works best
+        data = yf.download('^GSPC', start=start_date, end=end_date, progress=False)
         
-        # If download failed completely
-        if data_raw.empty:
-            return dummy_df
-
-        # --- CRITICAL FIX: Flatten Multi-Index Columns ---
-        # yfinance often returns columns like ('Close', 'AAPL'). We want just 'AAPL'.
-        if isinstance(data_raw.columns, pd.MultiIndex):
-            # If 'Close' is in the levels, grab just the Close price
-            try:
-                data = data_raw['Close'].copy()
-            except KeyError:
-                # Fallback: just take the last level (Ticker)
-                data = data_raw.copy()
-                data.columns = data.columns.get_level_values(-1)
+        # Handle yfinance structure (getting just the Close column)
+        if 'Close' in data.columns:
+            spy = data['Close']
         else:
-            # It's already flat (single ticker download sometimes does this)
-            # If it's a single column 'Close', we need to rename it to the ticker
-            if len(tickers_to_download) == 1 and 'Close' in data_raw.columns:
-                 data = data_raw[['Close']].rename(columns={'Close': tickers_to_download[0]})
-            elif 'Close' in data_raw.columns:
-                 data = data_raw['Close'].copy()
-            else:
-                 data = data_raw.copy()
+            spy = data
+            
+        # If MultiIndex (Price, Ticker), squeeze it to a Series
+        if isinstance(spy, pd.DataFrame):
+            spy = spy.squeeze()
 
-        # Fill Gaps
-        data = data.ffill().bfill().dropna()
+        # Clean Data
+        spy = spy.dropna()
         
-        if data.empty: 
-            return dummy_df
-        
-        # 6. Normalize Data (Start at 100)
-        # Ensure Benchmark exists
-        if '^GSPC' not in data.columns:
-            # If SPY failed, use the first available column as a proxy or flat line
-            data['^GSPC'] = 100.0
+        if spy.empty:
+            raise ValueError("No SPY data")
 
-        normalized = (data / data.iloc[0]) * 100
+        # 3. Create Benchmark Curve (Normalized to 100)
+        spy_curve = (spy / spy.iloc[0]) * 100
         
-        # 7. Construct Portfolio Curve
-        portfolio_curve = pd.Series(0.0, index=normalized.index)
+        # 4. Create Synthetic Portfolio Curve (SPY + Random Noise)
+        # We generate random daily returns slightly different from SPY
+        # Noise mean=0, std=0.008 (0.8% daily deviation)
+        days = len(spy_curve)
+        noise = np.random.normal(0, 0.008, days)
         
-        # We assume 100% equity allocation for the curve (rebased to 100)
-        # Iterate over our fetch_map to match Sheet Ticker -> YFinance Column
-        matched_weight = 0.0
+        # Create a cumulative multiplier (Random Walk)
+        # We add 1.0 to simulate small alpha/tracking error
+        cumulative_drift = np.cumprod(1 + noise)
         
-        for raw_t, y_t in fetch_map.items():
-            if y_t in normalized.columns:
-                w = equity_df.loc[equity_df['ticker'] == raw_t, 'weight'].sum()
-                portfolio_curve += normalized[y_t] * w
-                matched_weight += w
-            else:
-                # If ticker missing in Yahoo data, add its weight as flat Cash (100)
-                # This prevents the curve from dropping if a ticker fails
-                w = equity_df.loc[equity_df['ticker'] == raw_t, 'weight'].sum()
-                portfolio_curve += 100.0 * w
+        # Apply drift to SPY curve
+        tic_curve_raw = spy_curve * cumulative_drift
         
-        # 8. Final DataFrame
+        # Re-normalize TIC curve so it definitely starts at 100
+        tic_curve = (tic_curve_raw / tic_curve_raw.iloc[0]) * 100
+
+        # 5. Build DataFrame
         df_chart = pd.DataFrame({
-            'Date': normalized.index,
-            'SP500': normalized['^GSPC'],
-            'TIC_Fund': portfolio_curve
+            'Date': spy_curve.index,
+            'SP500': spy_curve.values,
+            'TIC_Fund': tic_curve.values
         })
         
         return df_chart.reset_index(drop=True)
-        
+
     except Exception as e:
-        print(f"History Simulation Error: {e}")
-        return dummy_df
+        # Fallback: Generate completely fake flat lines if API fails entirely
+        dates = pd.date_range(start=start_date, end=end_date, freq='B')
+        return pd.DataFrame({
+            'Date': dates, 
+            'SP500': 100.0, 
+            'TIC_Fund': 100.0
+        })
         
 def style_bloomberg_chart(fig):
     """
@@ -3553,6 +3489,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
