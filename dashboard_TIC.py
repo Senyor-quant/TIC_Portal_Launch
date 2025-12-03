@@ -1698,7 +1698,7 @@ def render_stock_research():
                     st.metric("Price / Book", f"{info.get('priceToBook', 0):.2f}")
             with k3:
                 with st.container(border=True):
-                    st.metric("Div Yield", f"{info.get('dividendYield', 0)*100:.2f}%" if info.get('dividendYield') else "N/A")
+                    st.metric("Div Yield", f"{info.get('dividendYield', 0):.2f}%" if info.get('dividendYield') else "N/A")
                     st.metric("Profit Margin", f"{info.get('profitMargins', 0)*100:.1f}%")
 
     with t2:
@@ -3489,6 +3489,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
