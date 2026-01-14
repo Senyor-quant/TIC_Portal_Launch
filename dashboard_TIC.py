@@ -73,7 +73,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-TIC_LOGO = "https://media.licdn.com/dms/image/v2/D4D0BAQEBPgrthbI7xQ/company-logo_200_200/B4DZoGPeNMJIAI-/0/1761041311048/tilburginvestmentclub_logo?e=1765411200&v=beta&t=cQ2EYv-uszLRoEOqyTbDj_-k9kwcle3ZIos4jcMdq9Q"
+TIC_LOGO = "https://media.licdn.com/dms/image/v2/D4D0BAQEBPgrthbI7xQ/company-logo_200_200/B4DZoGPeNMJIAI-/0/1761041311048/tilburginvestmentclub_logo?e=1770249600&v=beta&t=ZVfUkEMB4cu-ZNXakbHLXMEdMv8chcJTZsg3f7TgouQ"
 
 st.markdown("""
     <style>
@@ -3557,6 +3557,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
