@@ -17,6 +17,7 @@ import time
 import threading
 import concurrent.futures
 import hashlib
+import json
 
 # --- GOOGLE SHEETS CONNECTION SETUP ---
 SCOPES = [
@@ -315,73 +316,20 @@ def fetch_correlation_data(tickers):
         # print(f"Correlation Error: {e}") # Uncomment for debugging
         return pd.DataFrame()
 
-@st.cache_data(ttl=300)  # Cache for 5 mins to prevent overload
+@st.cache_data(ttl=5) # Check file every 5 seconds
 def fetch_live_prices_with_change(tickers):
-    """
-    Fetches Price AND Hourly Change for all tickers.
-    Refreshes only once per hour to save API limits.
-    """
-    if not tickers: return {}
+    # We ignore the 'tickers' input arg because we just load the whole snapshot
+    # In a real app, you might filter the result dict based on the input list
     
-    # Clean tickers: Ensure strings, uppercase, no empty values
-    clean_tickers = list(set([
-        str(t).upper().strip() for t in tickers 
-        if isinstance(t, str) and t and "CASH" not in t.upper()
-    ]))
-    
-    if not clean_tickers: return {}
-
+    if not os.path.exists("market_snapshot.json"):
+        return {}
+        
     try:
-        # Fetch 1 day of data to calculate change
-        # Threads=True speeds up the download significantly
-        data = yf.download(
-            clean_tickers, 
-            period="1d", 
-            interval="1h", 
-            group_by='ticker', 
-            progress=False,
-            threads=True
-        )
-        
-        results = {}
-        is_multi = len(clean_tickers) > 1
-        
-        for t in clean_tickers:
-            try:
-                # Handle Multi-Index vs Single Index returns from yfinance
-                df = data[t] if is_multi else data
-                
-                # Get valid close prices
-                valid_rows = df['Close'].dropna()
-                
-                if not valid_rows.empty:
-                    current_price = float(valid_rows.iloc[-1])
-                    
-                    # Calculate hourly change (delta)
-                    if len(valid_rows) >= 2:
-                        prev_price = float(valid_rows.iloc[-2])
-                        change = current_price - prev_price
-                        pct_change = (change / prev_price) * 100 if prev_price != 0 else 0.0
-                    else:
-                        change = 0.0
-                        pct_change = 0.0
-                        
-                    results[t] = {
-                        'price': round(current_price, 2),
-                        'change': round(change, 2),
-                        'pct': round(pct_change, 2)
-                    }
-                else:
-                    results[t] = {'price': 0.0, 'change': 0.0, 'pct': 0.0}
-                    
-            except Exception:
-                results[t] = {'price': 0.0, 'change': 0.0, 'pct': 0.0}
-                
-        return results
-        
-    except Exception as e:
-        print(f"Price Fetch Error: {e}")
-        return {}        
+        with open("market_snapshot.json", "r") as f:
+            data = json.load(f)
+        return data.get("prices", {})
+    except:
+        return {}
         
 @st.cache_data(ttl=3600*4)
 def fetch_real_benchmark_data(portfolio_df):
@@ -3557,6 +3505,7 @@ def main():
         """)
 if __name__ == "__main__":
     main()
+
 
 
 
