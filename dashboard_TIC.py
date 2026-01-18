@@ -2114,7 +2114,7 @@ def render_stock_research():
             st.info("Click the button above to load peer data (saves API usage).")
             
 def render_valuation_sandbox():
-    st.title("💎 Professional DCF Model")
+    st.title("DCF Model")
     st.caption("Discounted Cash Flow Analysis // Intrinsic Value Calculator")
 
     # --- 1. SETTINGS & DATA FETCHING ---
@@ -2169,7 +2169,7 @@ def render_valuation_sandbox():
         
         calc_wacc = rf_rate + (defaults['beta'] * mkt_prem)
         
-        wacc_input = st.number_input("WACC %", value=calc_wacc, min_value=0.03, max_value=0.20, step=0.001, format="%.2f%%")
+        wacc_input = st.number_input("WACC (Decimal)", value=calc_wacc, min_value=0.03, max_value=0.20, step=0.001, format="%.4f")
         st.caption(f"Implied by Beta {defaults['beta']:.2f}: {calc_wacc:.1%}")
 
     with col_term:
