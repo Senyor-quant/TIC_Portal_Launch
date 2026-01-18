@@ -141,9 +141,9 @@ st.markdown("""
 # ==========================================
 # 2. DATA LAYER (REAL DATA FETCHING)
 # ==========================================
-# --- DIRECT GOOGLE SHEET AUTH (SMART MATCHING) ---
+# --- DIRECT GOOGLE SHEET AUTH (Dual Check) ---
 def check_credentials_live(user_input, user_password):
-    """Checks credentials against Email OR Username (Name -> name.surname)."""
+    """Checks credentials against Email OR Username, handling both Plain & Hashed passwords."""
     try:
         # 1. Connect
         creds_dict = dict(st.secrets["gcp_service_account"])
@@ -162,25 +162,29 @@ def check_credentials_live(user_input, user_password):
         # 3. Prepare Inputs
         clean_input = user_input.strip().lower()
         clean_pass = user_password.strip()
+        
+        # Create the hash of what the user typed (for comparison)
         hashed_pass = hashlib.sha256(clean_pass.encode('utf-8')).hexdigest()
         
         for row in records:
-            # A. Get Email
+            # Match User (Email OR Name)
             db_email = str(row.get("Email", "")).strip().lower()
-            
-            # B. Generate Username from Name (e.g. "Senyo Azasoo" -> "senyo.azasoo")
             raw_name = str(row.get("Name", "")).strip()
             db_username = raw_name.lower().replace(" ", ".")
             
-            # C. Check if Input matches EITHER Email OR Username
             if clean_input == db_email or clean_input == db_username:
                 
-                # Found the user! Now check password
+                # --- THE DUAL CHECK FIX ---
                 db_pass = str(row.get("Password", "")).strip()
                 
-                # Check both plain text (old) and hash (new)
-                if db_pass == clean_pass or db_pass == hashed_pass:
+                # Check 1: Is it a legacy plain text password? (e.g. "pass")
+                if db_pass == clean_pass:
                     return row.get("Role", "Member"), None 
+                
+                # Check 2: Is it a modern hashed password?
+                elif db_pass == hashed_pass:
+                    return row.get("Role", "Member"), None 
+                
                 else:
                     return None, "Incorrect Password"
                 
@@ -3843,26 +3847,26 @@ def main():
         )
         
         st.divider()
-        if st.button("Log Out"):
-            # 1. Safely try to delete the cookie
+        # --- LOGOUT CALLBACK FUNCTION ---
+        def logout_callback():
+            """Handles logout logic before the app reruns."""
+            # 1. Delete the cookie
             try:
                 cookie_manager.delete("tic_user")
-            except KeyError:
-                pass # Cookie was already gone, ignore the error
-            except Exception as e:
-                print(f"Cookie Error: {e}") # Log other errors but don't crash
-
-            # 2. Clear internal session state
+            except:
+                pass
+    
+            # 2. Wipe Session State
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+        
+            # 3. Set flags
             st.session_state['logged_in'] = False
-            if 'user' in st.session_state:
-                del st.session_state['user']
-            
-            # 3. Delay slightly to let browser catch up
-            st.toast("Logging out...")
-            time.sleep(1.0)
-            
-            # 4. Restart
-            st.rerun()
+
+        # --- RENDER BUTTON WITH CALLBACK ---
+        # Notice we don't need 'if st.button:' logic anymore.
+        # The callback handles everything, and Streamlit auto-reruns after a callback.
+        st.button("Log Out", on_click=logout_callback)
         
         # SYSTEM STATUS
         st.caption(f"Last Updated: {datetime.now().strftime('%H:%M:%S')}")
