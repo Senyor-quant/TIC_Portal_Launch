@@ -245,7 +245,13 @@ def generate_unitized_history():
     print(f"   Fetching history for: {all_tickers}")
     try:
         raw_prices = yf.download(all_tickers, start=start_date, progress=False)['Close']
-        raw_prices = raw_prices.ffill().bfill() # Fill gaps
+        
+        # --- CRITICAL FIX IS HERE ---
+        # 1. Reindex to match our loop 'dates' exactly (adds rows for Holidays)
+        # 2. Forward Fill (ffill) copies Friday's price to the holiday Monday
+        raw_prices = raw_prices.reindex(dates).ffill().bfill()
+        # ----------------------------
+        
     except Exception as e:
         print(f"   History Fetch Error: {e}")
         return []
@@ -267,7 +273,7 @@ def generate_unitized_history():
             amt = flow['Amount']
             # Issue units at CURRENT NAV (protects existing holders)
             new_units = amt / current_nav if total_units > 0 else amt / 100.0
-            if total_units == 0: current_nav = 100.0 # Reset par if fund was empty
+            if total_units == 0: current_nav = 100.0 
             
             total_units += new_units
             cash += amt
@@ -290,21 +296,30 @@ def generate_unitized_history():
         assets_val = 0.0
         for t, shares in portfolio.items():
             if shares > 0:
-                # Handle Series vs DataFrame output from yfinance
                 try:
+                    # Look up price (Now guaranteed to exist because of reindex)
                     if isinstance(raw_prices, pd.Series):
                         price = raw_prices.loc[day]
                     else:
                         price = raw_prices.loc[day, t]
+                        
+                    # Safety check for NaNs (e.g. bad ticker)
+                    if pd.isna(price): price = 0.0
+                    
                     assets_val += shares * price
                 except:
-                    pass # Missing price for this day
+                    pass 
         
         total_aum = assets_val + cash
-        if total_units > 0:
+        
+        # Safety: If AUM drops to zero but we have shares, reuse yesterday's NAV
+        # This prevents "flash crashes" if data is momentarily missing
+        if total_aum == 0 and sum(portfolio.values()) > 0 and history_records:
+             current_nav = history_records[-1]['NAV']
+             total_aum = history_records[-1]['AUM']
+        elif total_units > 0:
             current_nav = total_aum / total_units
             
-        # Save Row (JSON friendly format)
         history_records.append({
             "Date": day_str,
             "NAV": round(current_nav, 2),
