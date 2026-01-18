@@ -145,8 +145,7 @@ st.markdown("""
 def check_credentials_live(user_email, user_password):
     """Checks credentials directly against the Google Sheet."""
     try:
-        # 1. Load Secrets
-        # We access st.secrets directly since we are in the dashboard
+        # 1. Load Secrets & Connect
         creds_dict = dict(st.secrets["gcp_service_account"])
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
@@ -160,19 +159,34 @@ def check_credentials_live(user_email, user_password):
         ws = sheet.worksheet("Members")
         records = ws.get_all_records() # List of dicts
         
-        # 3. Check User
+        # --- DEBUG: UNCOMMENT THE LINES BELOW IF IT STILL FAILS ---
+        # st.write(f"Found {len(records)} rows in Sheet.")
+        # if len(records) > 0:
+        #    st.write(f"Columns found: {list(records[0].keys())}")
+        # ----------------------------------------------------------
+
+        # 3. Prepare Inputs (Clean & Hash)
         clean_email = user_email.strip().lower()
         clean_pass = user_password.strip()
+        hashed_pass = hashlib.sha256(clean_pass.encode('utf-8')).hexdigest()
         
         for row in records:
-            # Adjust 'Email' and 'Password' keys to match your actual Sheet headers exactly!
-            row_email = str(row.get("Email", "")).strip().lower()
-            row_pass = str(row.get("Password", "")).strip()
+            # Flexible Column Matching (Handle "Email" vs "Email Address")
+            row_email = str(row.get("Email", row.get("Email Address", ""))).strip().lower()
             
-            if row_email == clean_email and row_pass == clean_pass:
-                return row.get("Role", "Member"), None # Success
+            # Flexible Password Matching (Handle "Password" vs "Pass")
+            row_pass = str(row.get("Password", row.get("Pass", ""))).strip()
+            
+            # Match Email
+            if row_email == clean_email:
+                # Match Password (Check BOTH plain text and hash)
+                # This fixes the issue if your sheet has "5e884..." but you typed "password"
+                if row_pass == clean_pass or row_pass == hashed_pass:
+                    return row.get("Role", "Member"), None 
+                else:
+                    return None, "Incorrect Password"
                 
-        return None, "Invalid email or password"
+        return None, f"User '{clean_email}' not found"
 
     except Exception as e:
         return None, f"Login System Error: {str(e)}"
