@@ -314,7 +314,7 @@ def generate_unitized_history():
         
         # Safety: If AUM drops to zero but we have shares, reuse yesterday's NAV
         # This prevents "flash crashes" if data is momentarily missing
-        if total_aum == 0 and sum(portfolio.values()) > 0 and history_records:
+        if total_aum <= 0 and sum(portfolio.values()) > 0 and history_records:
              current_nav = history_records[-1]['NAV']
              total_aum = history_records[-1]['AUM']
         elif total_units > 0:
