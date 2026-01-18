@@ -2114,94 +2114,207 @@ def render_stock_research():
             st.info("Click the button above to load peer data (saves API usage).")
             
 def render_valuation_sandbox():
-    st.title("🧮 Valuation Sandbox (DCF)")
-    st.caption("DISCOUNTED CASH FLOW MODEL // INTRINSIC VALUE CALCULATOR")
+    st.title("💎 Professional DCF Model")
+    st.caption("Discounted Cash Flow Analysis // Intrinsic Value Calculator")
 
-    c_inputs, c_viz = st.columns([1, 2])
+    # --- 1. SETTINGS & DATA FETCHING ---
+    with st.container(border=True):
+        c_tic, c_fetch, c_dummy = st.columns([1, 1, 3])
+        ticker = c_tic.text_input("Ticker", value="MSFT").upper()
+        
+        # Initialize Session State for inputs if they don't exist
+        if 'dcf_inputs' not in st.session_state:
+            st.session_state['dcf_inputs'] = {
+                'fcf': 10.0, 'shares': 1.0, 'cash': 5.0, 'debt': 2.0, 'beta': 1.0
+            }
+
+        if c_fetch.button("📥 Auto-Fill Data"):
+            with st.spinner(f"Pulling financials for {ticker}..."):
+                try:
+                    stock = yf.Ticker(ticker)
+                    info = stock.info
+                    
+                    # specific yfinance keys can be flaky, so we use .get with safe defaults
+                    fcf_raw = info.get('freeCashflow', 0) or info.get('operatingCashflow', 0) - info.get('capitalExpenditures', 0)
+                    if not fcf_raw: fcf_raw = 10_000_000_000 # Default fallback
+                    
+                    st.session_state['dcf_inputs'] = {
+                        'fcf': fcf_raw / 1e9, # Convert to Billions
+                        'shares': info.get('sharesOutstanding', 1_000_000_000) / 1e9,
+                        'cash': info.get('totalCash', 5_000_000_000) / 1e9,
+                        'debt': info.get('totalDebt', 2_000_000_000) / 1e9,
+                        'beta': info.get('beta', 1.0)
+                    }
+                    st.success("Data Loaded!")
+                except Exception as e:
+                    st.error(f"Could not fetch data: {e}")
+
+        # Unpack values for readability
+        defaults = st.session_state['dcf_inputs']
+
+    # --- 2. MODEL INPUTS (Split into logical sections) ---
+    col_drivers, col_wacc, col_term = st.columns(3)
     
-    with c_inputs:
+    with col_drivers:
+        st.subheader("1. Cash Flow Drivers")
+        fcf_base = st.number_input("Starting FCF ($B)", value=float(defaults['fcf']), step=0.1, format="%.2f")
+        growth_1_5 = st.slider("Growth Rate (Yr 1-5)", 0.0, 0.50, 0.15, 0.005, format="%.1f%%")
+        growth_6_10 = st.slider("Growth Rate (Yr 6-10)", 0.0, 0.30, 0.08, 0.005, format="%.1f%%")
+
+    with col_wacc:
+        st.subheader("2. Discount Rate (WACC)")
+        # Simple CAPM Builder
+        rf_rate = 0.042 # 4.2% Risk Free
+        mkt_prem = 0.055 # 5.5% Market Premium
+        
+        calc_wacc = rf_rate + (defaults['beta'] * mkt_prem)
+        
+        wacc_input = st.number_input("WACC %", value=calc_wacc, min_value=0.03, max_value=0.20, step=0.001, format="%.2f%%")
+        st.caption(f"Implied by Beta {defaults['beta']:.2f}: {calc_wacc:.1%}")
+
+    with col_term:
+        st.subheader("3. Terminal Value")
+        tv_method = st.radio("Method", ["Perpetual Growth", "Exit Multiple (EBITDA)"], horizontal=True)
+        
+        if tv_method == "Perpetual Growth":
+            term_val_input = st.number_input("Terminal Growth %", value=0.025, step=0.001, format="%.2f%%")
+            term_label = "L.T. Growth"
+        else:
+            term_val_input = st.number_input("Exit Multiple (x)", value=15.0, step=0.5)
+            term_label = "Exit Multiple"
+
+    st.divider()
+
+    # --- 3. CALCULATION ENGINE ---
+    # Projection Arrays
+    years = range(1, 11)
+    fcf_proj = []
+    discount_factors = []
+    pv_fcf = []
+    
+    current_fcf = fcf_base
+    
+    for i in years:
+        # Determine growth rate for this year
+        g = growth_1_5 if i <= 5 else growth_6_10
+        current_fcf = current_fcf * (1 + g)
+        
+        # Discount Factor
+        df = (1 + wacc_input) ** i
+        
+        fcf_proj.append(current_fcf)
+        discount_factors.append(df)
+        pv_fcf.append(current_fcf / df)
+
+    sum_pv_fcf = sum(pv_fcf)
+    
+    # Terminal Value Calc
+    if tv_method == "Perpetual Growth":
+        # Gordon Growth: FCF_11 / (WACC - g)
+        fcf_11 = current_fcf * (1 + term_val_input)
+        tv_raw = fcf_11 / (wacc_input - term_val_input)
+    else:
+        # Exit Multiple: Apply multiple to Year 10 FCF (Proxy for EBITDA here for simplicity, or keep as FCF multiple)
+        tv_raw = current_fcf * term_val_input
+        
+    pv_tv = tv_raw / ((1 + wacc_input) ** 10)
+    
+    enterprise_value = sum_pv_fcf + pv_tv
+    
+    # Equity Bridge
+    equity_value = enterprise_value + float(defaults['cash']) - float(defaults['debt'])
+    shares_out = float(defaults['shares'])
+    if shares_out == 0: shares_out = 1 # Avoid div/0
+    
+    target_price = equity_value / shares_out
+
+    # --- 4. OUTPUT DASHBOARD ---
+    c_chart, c_metrics = st.columns([2, 1])
+    
+    with c_metrics:
+        st.markdown(f"""
+        <div style="background-color: #D4AF37; padding: 20px; border-radius: 10px; text-align: center; color: black;">
+            <h2 style="margin:0; font-size: 3em; font-weight: 800;">${target_price:.2f}</h2>
+            <p style="margin:0; font-weight: bold; opacity: 0.8;">Implied Share Price</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.write("")
         with st.container(border=True):
-            st.markdown("### 1. INPUTS")
-            ticker = st.text_input("Ticker Symbol", "AAPL")
-            fcf = st.number_input("Last FCF ($B)", value=100.0)
-            shares = st.number_input("Shares Out (B)", value=15.0)
-            cash = st.number_input("Net Cash ($B)", value=50.0)
-            
-            st.markdown("### 2. ASSUMPTIONS")
-            growth_1_5 = st.slider("Growth (Yr 1-5)", 0.0, 0.30, 0.10, 0.01)
-            growth_6_10 = st.slider("Growth (Yr 6-10)", 0.0, 0.20, 0.05, 0.01)
-            wacc = st.slider("WACC %", 0.05, 0.15, 0.09, 0.005)
-            term_growth = st.slider("Terminal Growth %", 0.01, 0.05, 0.025, 0.005)
+            st.write("**Valuation Bridge ($B)**")
+            st.write(f"Sum of PV (10yr): **${sum_pv_fcf:.2f}**")
+            st.write(f"+ PV Terminal Val: **${pv_tv:.2f}**")
+            st.divider()
+            st.write(f"= Enterprise Value: **${enterprise_value:.2f}**")
+            st.write(f"+ Cash: **${defaults['cash']:.2f}**")
+            st.write(f"- Debt: (**${defaults['debt']:.2f}**)")
+            st.divider()
+            st.write(f"= Equity Value: **${equity_value:.2f}**")
 
-    # --- CORE CALCULATION FUNCTION ---
-    def calculate_dcf(w_in, g_in):
-        # Years 1-5
-        future_fcf = []
-        discount_factors = []
-        for i in range(1, 6):
-            future_fcf.append(fcf * ((1 + growth_1_5) ** i))
-            discount_factors.append((1 + w_in) ** i)
+    with c_chart:
+        # Visualization: FCF Ramp
+        df_plot = pd.DataFrame({
+            "Year": [f"Y{y}" for y in years],
+            "Projected FCF": fcf_proj,
+            "Present Value": pv_fcf
+        })
         
-        # Years 6-10
-        for i in range(1, 6):
-            future_fcf.append(future_fcf[-1] * ((1 + growth_6_10) ** i))
-            discount_factors.append((1 + w_in) ** (5 + i))
-            
-        # Terminal Value
-        tv = (future_fcf[-1] * (1 + g_in)) / (w_in - g_in)
-        pv_tv = tv / ((1 + w_in) ** 10)
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=df_plot['Year'], y=df_plot['Projected FCF'], name='Projected FCF', marker_color='#333333'))
+        fig.add_trace(go.Bar(x=df_plot['Year'], y=df_plot['Present Value'], name='Discounted PV', marker_color='#D4AF37'))
         
-        pv_fcf = sum([f/d for f, d in zip(future_fcf, discount_factors)])
-        
-        equity_val = pv_fcf + pv_tv + cash
-        return equity_val / shares, pv_fcf, pv_tv
-
-    # Base Case
-    share_price, pv_fcf, pv_tv = calculate_dcf(wacc, term_growth)
-
-    with c_viz:
-        st.subheader(f"IMPLIED VALUE: ${share_price:.2f}")
-        
-        # 1. Waterfall Chart
-        fig = px.bar(
-            x=['PV FCF (10yr)', 'PV Term Val', 'Net Cash'],
-            y=[pv_fcf, pv_tv, cash],
-            title=f"ENTERPRISE VALUE BRIDGE: {ticker.upper()}",
-            labels={'y':'Value ($B)', 'x':''}
+        fig.update_layout(
+            title="Cash Flow Projection (10 Years)",
+            barmode='overlay', 
+            margin=dict(l=20, r=20, t=40, b=20),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
-        fig.update_traces(marker_color=['#FF9900', '#444444', '#00FF00']) 
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
+
+    # --- 5. SENSITIVITY ANALYSIS (Bottom) ---
+    with st.expander("🌡️ Sensitivity Matrix (Price vs Assumptions)", expanded=True):
+        # Generate Ranges
+        wacc_range = [wacc_input - 0.01, wacc_input - 0.005, wacc_input, wacc_input + 0.005, wacc_input + 0.01]
         
-        st.divider()
-        
-        # 2. SENSITIVITY TABLE (HEATMAP)
-        st.markdown("#### 🌡️ Sensitivity Analysis (Price vs Assumptions)")
-        
-        # Create Ranges
-        wacc_range = np.linspace(wacc - 0.01, wacc + 0.01, 5) # +/- 1%
-        term_range = np.linspace(term_growth - 0.005, term_growth + 0.005, 5) # +/- 0.5%
-        
-        # Build Matrix
-        z_values = []
+        if tv_method == "Perpetual Growth":
+            term_range = [term_val_input - 0.005, term_val_input - 0.0025, term_val_input, term_val_input + 0.0025, term_val_input + 0.005]
+            x_label = "Growth %"
+            fmt_x = "{:.2%}"
+        else:
+            term_range = [term_val_input - 2, term_val_input - 1, term_val_input, term_val_input + 1, term_val_input + 2]
+            x_label = "Exit Multiple"
+            fmt_x = "{:.1f}x"
+            
+        z = []
         for w in wacc_range:
             row = []
-            for g in term_range:
-                p, _, _ = calculate_dcf(w, g)
-                row.append(round(p, 2))
-            z_values.append(row)
+            for t in term_range:
+                # Recalculate Logic (Simplified for matrix)
+                # Note: In a real app, refactor the calculation into a helper function to avoid code dup
+                _pv_sum = sum([f / ((1+w)**i) for i, f in zip(years, fcf_proj)]) # Approx: uses same growth vector
+                
+                if tv_method == "Perpetual Growth":
+                    _tv = (fcf_proj[-1]*(1+t)) / (w-t)
+                else:
+                    _tv = fcf_proj[-1] * t
+                    
+                _pv_tv = _tv / ((1+w)**10)
+                _eq_val = _pv_sum + _pv_tv + float(defaults['cash']) - float(defaults['debt'])
+                row.append(_eq_val / shares_out)
+            z.append(row)
             
-        # Plot Heatmap
         fig_heat = px.imshow(
-            z_values,
-            labels=dict(x="Terminal Growth", y="WACC", color="Share Price"),
-            x=[f"{x:.1%}" for x in term_range],
-            y=[f"{y:.1%}" for y in wacc_range],
-            text_auto=True,
-            aspect="auto",
-            color_continuous_scale="RdYlGn"
+            z,
+            labels=dict(x=f"Terminal {x_label}", y="WACC", color="Price ($)"),
+            x=[fmt_x.format(x) for x in term_range],
+            y=[f"{y:.2%}" for y in wacc_range],
+            text_auto=".2f",
+            color_continuous_scale="RdYlGn",
+            aspect="auto"
         )
-        fig_heat.update_layout(title="Implied Share Price Matrix")
-        st.plotly_chart(fig_heat, width="stretch")
+        st.plotly_chart(fig_heat, use_container_width=True)
+
+
 def render_calendar_view(user, all_events):
     st.title("🗓️ Smart Calendar")
     st.caption(f"Showing events for: {user['n']} ({user['d']} Dept)")
