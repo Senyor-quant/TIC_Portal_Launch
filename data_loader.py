@@ -1,4 +1,3 @@
-import time
 import json
 import pandas as pd
 import yfinance as yf
@@ -9,6 +8,7 @@ import os
 import toml 
 import math
 import concurrent.futures
+import time  # <--- ADDED THIS TO FIX THE CRASH
 
 # --- CONFIGURATION ---
 UPDATE_INTERVAL = 300  # 5 minutes (Prices & Sheets)
@@ -35,7 +35,7 @@ def get_gspread_client():
         return None
 
 def fetch_database_snapshot():
-    """Fetches ALL tabs from Google Sheets."""
+    """Fetches ALL tabs from Google Sheets and SCRUBS sensitive data."""
     print("📥 Fetching Google Sheets Database...")
     client = get_gspread_client()
     if not client: return None
@@ -50,6 +50,30 @@ def fetch_database_snapshot():
             try:
                 ws = sheet.worksheet(tab)
                 data = ws.get_all_values()
+                
+                # --- SECURITY SCRUBBER (New) ---
+                # If this is the Members tab, look for password columns and wipe them
+                if tab == "Members" and len(data) > 0:
+                    headers = [h.lower() for h in data[0]]
+                    # Identify columns to scrub
+                    sensitive_indices = [
+                        i for i, h in enumerate(headers) 
+                        if "password" in h or "secret" in h or "key" in h
+                    ]
+                    
+                    if sensitive_indices:
+                        print(f"   🛡️ Scrubbing sensitive columns from {tab}...")
+                        clean_data = []
+                        clean_data.append(data[0]) # Keep headers
+                        for row in data[1:]:
+                            new_row = list(row) # Copy row
+                            for idx in sensitive_indices:
+                                if idx < len(new_row):
+                                    new_row[idx] = "" # WIPE DATA
+                            clean_data.append(new_row)
+                        data = clean_data # Swap raw data for clean data
+                # -------------------------------
+
                 snapshot[tab] = data
                 print(f"   - Fetched {tab} ({len(data)} rows)")
             except Exception as e:
@@ -68,7 +92,7 @@ TICKER_MAP = {
     "PRX": "PRX.AS",      # Prosus (Amsterdam)
     "INGA": "INGA.AS",    # ING (Amsterdam)
     "FLOW": "FLOW.AS",    # Flow Traders (Amsterdam)
-    "VLK": "VLK.AS",      # Van Lanschot (Amsterdam) - Verify if this is the correct VLK
+    "VLK": "VLK.AS",      # Van Lanschot (Amsterdam)
     "RWE": "RWE.DE",      # RWE AG (Germany)
     "ENR": "ENR.DE",      # Siemens Energy (Germany)
     "HEI": "HEI.DE",      # Heidelberg Materials
@@ -77,9 +101,9 @@ TICKER_MAP = {
     "UMI": "UMI.BR",      # Umicore (Brussels)
     "ENGI": "ENGI.PA",    # Engie (Paris)
     "AIR": "AIR.PA",      # Airbus (Paris)
-    "RR.": "RR.L",        # Rolls Royce (London) - Yahoo often uses RR.L
-    "BFT": "BFT.BR",      # Belfius? Or check specific holding.
-    "IOC": "IOC.L",       # Check if this is Cosmos or similar.
+    "RR.": "RR.L",        # Rolls Royce (London)
+    "BFT": "BFT.BR",      # Belfius
+    "IOC": "IOC.L",       # Cosmos
     "NURS": "NURS.DE",    # Check specific listing
 }
 
@@ -110,7 +134,6 @@ def extract_tickers_from_snapshot(db_snapshot):
                             mapped_t = TICKER_MAP[raw_t]
                             tickers.add(mapped_t)
                         # 2. Heuristic: If it looks like a US ticker (no dots), keep it.
-                        #    If it needs a suffix but isn't in map, it might fail (add to map later).
                         else:
                             tickers.add(raw_t)
 
