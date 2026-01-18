@@ -1116,30 +1116,35 @@ def run_monte_carlo(current_nav, volatility, years=1, simulations=1000):
         
     return paths
 
-@st.cache_data(ttl=300) # Short cache (5 min) because reading a local file is fast
+@st.cache_data(ttl=300)
 def fetch_simulated_history(f_port, q_port):
     """
-    Reads the pre-calculated unitized history from 'history.json'.
-    This is extremely fast because data_loader.py did the heavy lifting.
+    Reads 'history.json' and normalizes both lines safely to start at 100.
     """
-    # 1. Load the pre-calculated history
+    # 1. Load History
     try:
         with open("history.json", "r") as f:
             raw_data = json.load(f)
-        
         df_hist = pd.DataFrame(raw_data)
+        
         if df_hist.empty: return pd.DataFrame()
         
         df_hist['Date'] = pd.to_datetime(df_hist['Date'])
-    except Exception:
-        return pd.DataFrame() # Return empty if file missing
+        
+        # FIX 1: Ensure TIC Fund is also numeric and normalized
+        # If the history file has raw NAV (e.g. 100, 101), this is fine.
+        # If it's 0, we need to handle it.
+        df_hist['TIC_Fund'] = pd.to_numeric(df_hist['NAV'], errors='coerce').fillna(100.0)
 
-    # 2. Fetch Benchmark (S&P 500) for the same range
-    # We still fetch this live to keep it fresh, but it's only one ticker.
+    except Exception:
+        return pd.DataFrame() 
+
+    # 2. Fetch Benchmark (S&P 500)
     try:
         start_date = df_hist['Date'].iloc[0]
         end_date = df_hist['Date'].iloc[-1]
         
+        # Download with buffer to ensure we catch the start price
         spy = yf.download('^GSPC', start=start_date, end=end_date, progress=False)['Close']
         if isinstance(spy, pd.DataFrame): spy = spy.squeeze()
         spy = spy.dropna()
@@ -1147,16 +1152,27 @@ def fetch_simulated_history(f_port, q_port):
         # Align Dates
         spy = spy.reindex(df_hist['Date'], method='ffill')
         
+        # FIX 2: KEY FIX IS HERE (.bfill)
+        # If the start date was a Sunday, ffill produces NaN. 
+        # bfill looks forward to Monday to find the first valid price.
+        spy = spy.bfill().ffill()
+        
         # Normalize SPY to start at 100
         spy_start = spy.iloc[0]
-        if pd.isna(spy_start) or spy_start == 0: spy_start = 1
+        
+        # Safety: If it's still 0 or NaN, force it to the first available non-zero value
+        if pd.isna(spy_start) or spy_start == 0: 
+             spy_start = spy.mean() # Last resort fallback
         
         df_hist['SP500'] = (spy.values / spy_start) * 100
         
-        # Rename NAV column to match what the chart expects
-        df_hist['TIC_Fund'] = df_hist['NAV']
+        # Normalize TIC Fund to start at 100 too (for fair comparison)
+        tic_start = df_hist['TIC_Fund'].iloc[0]
+        if tic_start > 0:
+            df_hist['TIC_Fund'] = (df_hist['TIC_Fund'] / tic_start) * 100
         
-    except Exception:
+    except Exception as e:
+        # If SPY fails, just show a flat line at 100 so the app doesn't crash
         df_hist['SP500'] = 100.0 
 
     return df_hist[['Date', 'SP500', 'TIC_Fund']]
