@@ -160,13 +160,20 @@ def fetch_market_events_parallel(ticker_list):
 
 def fetch_market_prices(ticker_list):
     """
-    STEALTH MODE: Fetches 1-by-1 to bypass Yahoo IP bans on Cloud Servers.
+    SUPER STEALTH MODE: 
+    1. Uses a fake Browser User-Agent to fix '401 Unauthorized'
+    2. Fetches 1-by-1 to avoid 'Rate Limit'
     """
     print(f"💹 Fetching Prices for {len(ticker_list)} assets (Stealth Mode)...")
     
-    # 1. Add Indices manually
+    # 1. Define the 'Browser Mask' (The Secret Sauce)
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    })
+
+    # 2. Add Indices manually
     full_list = set(ticker_list)
-    # Add major market indices for context
     full_list.update(["EURUSD=X", "^GSPC", "^VIX", "BTC-USD", "JPYEUR=X", "GBPEUR=X"])
     
     market_snap = {
@@ -174,24 +181,21 @@ def fetch_market_prices(ticker_list):
         "prices": {}
     }
     
-    # 2. Sequential Loop with Sleep (The "Human" way)
+    # 3. Sequential Loop
     for t in full_list:
         try:
-            # 💤 SLEEP: This is the most important line. 
-            # It prevents the "Too Many Requests" error.
-            time.sleep(0.5) 
+            time.sleep(0.25) # Sleep to look human
             
-            # Use Ticker object (different API endpoint than .download)
-            dat = yf.Ticker(t)
+            # Pass the 'session' to yfinance
+            dat = yf.Ticker(t, session=session)
             
-            # Try to get fast info first
-            # We look for 'currentPrice' (stocks) or 'regularMarketPrice' (indices)
+            # Try Fast Info
             price = dat.info.get('regularMarketPrice') or dat.info.get('currentPrice') or dat.info.get('previousClose')
             prev = dat.info.get('previousClose')
             
-            # Fallback: If "info" fails, grab 2 days of history
+            # Fallback to History
             if price is None:
-                hist = dat.history(period="5d") # 5d is safer than 1d for liquidity
+                hist = dat.history(period="5d")
                 if not hist.empty:
                     price = float(hist['Close'].iloc[-1])
                     prev = float(hist['Close'].iloc[-2]) if len(hist) > 1 else price
@@ -203,7 +207,6 @@ def fetch_market_prices(ticker_list):
             else:
                 price = 0.0; change = 0.0; pct = 0.0
 
-            # Store it
             market_snap["prices"][t] = {"price": price, "change": change, "pct": pct}
             print(f"   ✅ {t}: {price}")
 
@@ -212,7 +215,7 @@ def fetch_market_prices(ticker_list):
             market_snap["prices"][t] = {"price": 0.0, "change": 0.0, "pct": 0.0}
 
     return market_snap
-
+    
 # ==========================================
 # NEW SECTION: HISTORICAL UNITIZATION ENGINE
 # ==========================================
