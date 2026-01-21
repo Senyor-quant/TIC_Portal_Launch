@@ -159,44 +159,57 @@ def fetch_market_events_parallel(ticker_list):
     return events
 
 def fetch_market_prices(ticker_list):
-    """Fetches Prices for tickers found in the DB snapshot."""
-    full_list = set(ticker_list)
-    full_list.update(["EURUSD=X", "^GSPC", "^VIX", "BTC-USD", "JPYEUR=X", "GBPEUR=X"])
-    final_list = list(full_list)
+    """
+    STEALTH MODE: Fetches 1-by-1 to bypass Yahoo IP bans on Cloud Servers.
+    """
+    print(f"💹 Fetching Prices for {len(ticker_list)} assets (Stealth Mode)...")
     
-    print(f"💹 Fetching Prices for {len(final_list)} assets...")
+    # 1. Add Indices manually
+    full_list = set(ticker_list)
+    # Add major market indices for context
+    full_list.update(["EURUSD=X", "^GSPC", "^VIX", "BTC-USD", "JPYEUR=X", "GBPEUR=X"])
     
     market_snap = {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "prices": {}
     }
     
-    if final_list:
+    # 2. Sequential Loop with Sleep (The "Human" way)
+    for t in full_list:
         try:
-            data = yf.download(final_list, period="5d", interval="1d", progress=False, group_by='ticker', threads=False)
+            # 💤 SLEEP: This is the most important line. 
+            # It prevents the "Too Many Requests" error.
+            time.sleep(0.5) 
             
-            for t in final_list:
-                try:
-                    df = data[t] if len(final_list) > 1 else data
-                    df = df.dropna(subset=['Close'])
+            # Use Ticker object (different API endpoint than .download)
+            dat = yf.Ticker(t)
+            
+            # Try to get fast info first
+            # We look for 'currentPrice' (stocks) or 'regularMarketPrice' (indices)
+            price = dat.info.get('regularMarketPrice') or dat.info.get('currentPrice') or dat.info.get('previousClose')
+            prev = dat.info.get('previousClose')
+            
+            # Fallback: If "info" fails, grab 2 days of history
+            if price is None:
+                hist = dat.history(period="5d") # 5d is safer than 1d for liquidity
+                if not hist.empty:
+                    price = float(hist['Close'].iloc[-1])
+                    prev = float(hist['Close'].iloc[-2]) if len(hist) > 1 else price
+            
+            # Calculate Data
+            if price and prev:
+                change = price - prev
+                pct = (change / prev) * 100
+            else:
+                price = 0.0; change = 0.0; pct = 0.0
 
-                    if not df.empty:
-                        current = float(df['Close'].iloc[-1])
-                        prev = float(df['Close'].iloc[-2]) if len(df) > 1 else current
-                        change = current - prev
-                        pct = (change / prev) * 100 if prev != 0 else 0.0
-                        
-                        if math.isnan(current): current = 0.0
-                        if math.isnan(change): change = 0.0
-                        if math.isnan(pct): pct = 0.0
+            # Store it
+            market_snap["prices"][t] = {"price": price, "change": change, "pct": pct}
+            print(f"   ✅ {t}: {price}")
 
-                        market_snap["prices"][t] = {"price": current, "change": change, "pct": pct}
-                    else:
-                        market_snap["prices"][t] = {"price": 0.0, "change": 0.0, "pct": 0.0}
-                except:
-                    market_snap["prices"][t] = {"price": 0.0, "change": 0.0, "pct": 0.0}
         except Exception as e:
-            print(f"   ⚠️ Price Fetch Error: {e}")
+            print(f"   ⚠️ Failed {t}: {e}")
+            market_snap["prices"][t] = {"price": 0.0, "change": 0.0, "pct": 0.0}
 
     return market_snap
 
